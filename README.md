@@ -28,6 +28,8 @@ The shared request path is **React -> API Gateway -> Jobs API Lambda -> SQS -> A
 
 The two audio events return to the same queue: first the malware-scan result, then the transcription result. "Validate + save" is code inside the AI Worker, not an extra deployed Lambda.
 
+The diagram also shows WAF edge protection, Comprehend text-safety checks, the SQS dead-letter queue, and the shared monitoring, alerting, encryption, and secret-management services. AgentCore remains one box so its internal tools and memory do not distract from the main routes.
+
 See [Architecture](ARCHITECTURE.md) for the request flows and current tradeoffs. The [code map](docs/architecture/code-map.md) connects every diagram box to its implementation or infrastructure definition.
 
 ## Engineering Highlights

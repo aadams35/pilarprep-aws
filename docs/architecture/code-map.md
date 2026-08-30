@@ -6,6 +6,7 @@ Use the same labels as the [architecture diagram](pilarprep-aws-architecture.png
 | --- | --- | --- |
 | PilarPrep React app | [App](../../frontend/src/App.tsx), [browser clients](../../frontend/src/lib/) | [Frontend](../../infrastructure/frontend.yaml) |
 | CloudFront and frontend S3 | [Browser entry](../../frontend/src/main.tsx), [build](../../vite.config.ts) | [Frontend](../../infrastructure/frontend.yaml) |
+| AWS WAF | Edge protection; no separate application handler | [CloudFront Web ACL association and optional managed ACL](../../infrastructure/frontend.yaml) |
 | Cognito | [Workspace authentication](../../frontend/src/lib/cognito-auth.ts), [guest signing](../../frontend/src/lib/aws-sigv4.ts), [server scope](../../backend/pipeline/state.py) | [Jobs pipeline](../../infrastructure/jobs-pipeline.yaml), [core Bedrock stack](../../infrastructure/bedrock.yaml) |
 | API Gateway | [Jobs API routing](../../backend/jobs_api/handler.py) | [Jobs pipeline](../../infrastructure/jobs-pipeline.yaml) |
 | Jobs API Lambda | [jobs_api/handler.py](../../backend/jobs_api/handler.py) | `JobsApiFunction` in [jobs-pipeline.yaml](../../infrastructure/jobs-pipeline.yaml) |
@@ -13,8 +14,9 @@ Use the same labels as the [architecture diagram](pilarprep-aws-architecture.png
 | AI Worker Lambda | [ai_worker/handler.py](../../backend/ai_worker/handler.py) | `AiWorkerFunction` in [jobs-pipeline.yaml](../../infrastructure/jobs-pipeline.yaml) |
 | Amazon Bedrock | [brief_generator.py](../../backend/bedrock/brief_generator.py) | [Model and Guardrail resources](../../infrastructure/bedrock.yaml), [worker permissions](../../infrastructure/jobs-pipeline.yaml) |
 | Guardrails | [Shared safety](../../backend/shared/content_safety.py), [brief generation](../../backend/bedrock/brief_generator.py) | [Guardrail](../../infrastructure/bedrock.yaml) |
+| Amazon Comprehend | [Text PII screening and meeting-context exceptions](../../backend/shared/content_safety.py) | [Worker enablement and permissions](../../infrastructure/jobs-pipeline.yaml), [runtime enablement and permissions](../../infrastructure/agentcore.yaml) |
 | AgentCore + Strands | [Runtime entry](../../backend/agentcore/runtime/main.py), [handoff/catch-up](../../backend/agentcore/runtime/service.py), [meeting analysis](../../backend/agentcore/runtime/meeting.py) | [AgentCore](../../infrastructure/agentcore.yaml) |
-| AgentCore tools and memory | [Tool handler](../../backend/agentcore/tools/handler.py), [Gateway client](../../backend/agentcore/runtime/gateway.py), [memory](../../backend/agentcore/runtime/memory.py) | [Gateway, tool Lambda, Memory](../../infrastructure/agentcore.yaml) |
+| AgentCore internals (not expanded in the diagram) | [Tool handler](../../backend/agentcore/tools/handler.py), [Gateway client](../../backend/agentcore/runtime/gateway.py), [memory](../../backend/agentcore/runtime/memory.py) | [Gateway, tool Lambda, Memory](../../infrastructure/agentcore.yaml) |
 | Bedrock Knowledge Base / S3 Vectors | [Scoped retrieval](../../backend/agentcore/runtime/evidence.py), [evidence lifecycle](../../backend/pipeline/evidence.py) | [Knowledge Base and vector store](../../infrastructure/jobs-pipeline.yaml) |
 | Validate + save | [Worker validation and completion](../../backend/ai_worker/handler.py), [review promotion](../../backend/pipeline/handoff_promotion.py), [artifact tools](../../backend/agentcore/tools/handler.py) | Runs inside existing compute; not a separate Lambda |
 | DynamoDB | [State and idempotency](../../backend/pipeline/state.py) | [Application table](../../infrastructure/jobs-pipeline.yaml); compatibility resources also remain in [core stack](../../infrastructure/bedrock.yaml) |
@@ -24,6 +26,9 @@ Use the same labels as the [architecture diagram](pilarprep-aws-architecture.png
 | EventBridge: scan result | [Scan event handler](../../backend/ai_worker/handler.py) | [GuardDuty event rule and queue policy](../../infrastructure/jobs-pipeline.yaml) |
 | Amazon Transcribe | [Transcription start/result handling](../../backend/pipeline/meeting.py) | [Worker permissions](../../infrastructure/jobs-pipeline.yaml) |
 | EventBridge: transcript ready | [Transcript continuation](../../backend/ai_worker/handler.py) | [Transcribe event rule](../../infrastructure/jobs-pipeline.yaml) |
+| CloudWatch, X-Ray, and SNS | [Job metrics](../../backend/pipeline/state.py), [worker diagnostics](../../backend/ai_worker/handler.py) | [Logs, Lambda tracing, dashboard, alarms, and notification topic](../../infrastructure/jobs-pipeline.yaml) |
+| AWS KMS | Encryption through AWS service configuration | [Application encryption key](../../infrastructure/bedrock.yaml), [data and queue key settings](../../infrastructure/jobs-pipeline.yaml) |
+| Secrets Manager and IAM | [Application scope](../../backend/pipeline/state.py), [agent scope validation](../../backend/agentcore/common/security.py) | [API-origin secret and service roles](../../infrastructure/jobs-pipeline.yaml), [scope secret and agent roles](../../infrastructure/agentcore.yaml) |
 
 ## Follow One Request
 

@@ -21,6 +21,8 @@ Queue delivery is at least once. Conditional writes, job leases, and version che
 
 ## Handoff and Catch-up
 
+The diagram keeps AgentCore as a single component; its tools and memory are deliberately not expanded into separate boxes.
+
 After approval, the user explicitly starts the pre-call handoff. Handoff and catch-up enter the same Jobs API and queue, then route to AgentCore. Strands coordinates handoff tools, while the runtime has a direct Bedrock catch-up path and bounded recovery behavior. AgentCore is the runtime; Strands is the orchestration library; Bedrock hosts the model.
 
 The agent receives signed scope and can use governed tools for approved packets and project context. Retrieval is metadata-filtered and revalidated against the requested scope. AgentCore Memory supports handoff/catch-up continuity; meeting analysis does not use that conversational memory. Catch-up does not mutate the business project's approved state, although its job/result records and permitted conversation memory are still stored.
@@ -44,6 +46,25 @@ The two EventBridge boxes in the diagram represent different rules/event types, 
 - **Knowledge Base and S3 Vectors:** indexed approved evidence and embeddings, with scope metadata checked during retrieval.
 
 Foundation-model weights are managed by Bedrock, not stored in the application's S3 buckets. Retrieved sources, prompts, configuration, generated documents, and conversational memory are separate kinds of data.
+
+## Supporting Security and Operations
+
+These services support the main routes rather than adding more processing stages:
+
+| Service | Role |
+| --- | --- |
+| AWS WAF | Protects the CloudFront edge, including rate-limiting rules. The signed-in workspace's `/api/` requests also travel through CloudFront; the React-to-API line is a logical connection. |
+| Amazon Comprehend | The AI Worker and AgentCore call `DetectPiiEntities` on eligible input/output text. Names are preserved. The private meeting-processing, meeting-approval, and meeting-analysis actions bypass Comprehend screening to retain full context; Bedrock Guardrails still apply. |
+| SQS dead-letter queue | Retains repeatedly failed deliveries after the source queue's three-receive limit, for up to 14 days. It is a failure destination, not a parallel generation path or an automatic replay loop. |
+| CloudWatch and X-Ray | Collect logs, application/service metrics, and enabled Lambda traces. Alarms cover failures, queue backlog, and processing delays. |
+| Amazon SNS | Receives operations-alarm notifications. Email delivery additionally requires a configured and confirmed subscription. |
+| AWS KMS | Provides the deployed customer-managed encryption key for application data and queues. |
+| Secrets Manager | Holds internal scope-signing and CloudFront-to-API verification secrets. Browser clients never receive these secrets. |
+| IAM | Restricts the service roles and permitted resource access throughout the workflow. |
+
+Comprehend performs text detection, GuardDuty scans uploaded files for malware, and Bedrock Guardrails enforce AI content policies. These are separate checks. Preserving a detected name does not prevent the Comprehend request or its text-processing charge.
+
+The supporting services above were checked against source/IaC and read-only deployed-resource queries on August 30, 2026. The live worker has content safety and PII screening enabled. WAF is attached to CloudFront through the existing external Web ACL rather than a new managed ACL created by this repository. No infrastructure was changed for this diagram update.
 
 ## Scope of This Repository
 
