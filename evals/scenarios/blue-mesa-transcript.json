@@ -1,0 +1,42 @@
+{
+  "synthetic": true,
+  "timestampNote": "Hand-authored test timestamps, not measured MP3 timings. These fixtures evaluate transcript reasoning, not transcription accuracy.",
+  "segments": [
+    {
+      "speaker": "Ariana Cole",
+      "start": 0,
+      "end": 20,
+      "text": "The payroll goal is right: onboarding averages twelve weeks and we want to test a four-week target for two design partners. That target is not an achieved result. We have approved discovery only, not implementation funding or a launch date."
+    },
+    {
+      "speaker": "Dev Malik",
+      "start": 20,
+      "end": 45,
+      "text": "We already run the payment platform on AWS and the ledger stays unchanged. The API-first assumption is wrong for the second payroll partner. They require encrypted files in the first release. I will deliver the partner interface inventory by Friday, dependent on the partner specification."
+    },
+    {
+      "speaker": "Rachel Kim",
+      "start": 45,
+      "end": 70,
+      "text": "Seven-year retention was an assumption, not an approved policy. We have not decided the retention duration. I will review the payroll data classification and recommend retention by next Tuesday, after Legal provides the contractual requirements."
+    },
+    {
+      "speaker": "Priya Shah",
+      "start": 70,
+      "end": 95,
+      "text": "I own reconciliation operations, not budget approval. I will map payroll cutoff exceptions and propose the reconciliation owner by Wednesday after receiving Dev's interface inventory. My team cannot accept duplicate postings or an unowned exception queue."
+    },
+    {
+      "speaker": "Ariana Cole",
+      "start": 95,
+      "end": 115,
+      "text": "Implementation funding and the launch date remain open questions for the next sponsor review. We have agreed to collect evidence, not to deploy. Do not turn that into an approved release decision. Who will confirm that the partner certification can fit our proposed first release?"
+    },
+    {
+      "speaker": "Dev Malik",
+      "start": 115,
+      "end": 135,
+      "text": "The payment APIs already being on AWS and the unchanged ledger boundary were correct in the brief. Spare platform capacity was not confirmed. We still need to validate recovery objectives and partner certification before any readiness recommendation."
+    }
+  ]
+}

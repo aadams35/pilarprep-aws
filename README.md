@@ -55,7 +55,7 @@ infrastructure/            CloudFormation/SAM templates, named by service group
 data/                     Fictional scenarios, evidence corpus, and evaluation rubric
 demo-assets/               Synthetic BlueMesa meeting audio
 tests/                    Frontend unit and browser tests
-evals/                    Offline scenario-quality checks
+evals/                    Offline checks and opt-in model comparison scenarios
 scripts/                  Deployment, publication checks, and optional live smoke tests
 docs/                     Architecture, operations, and engineering decisions
 ```
@@ -84,6 +84,10 @@ npm run verify
 ```
 
 The default verification suite uses local fixtures and mocked AWS services; it does not deploy infrastructure or invoke paid models. Live smoke-test scripts are separate and require explicit configuration. Offline rubric scores are regression checks, not measurements of live model accuracy.
+
+## Compare Models
+
+The [model evaluation guide](evals/README.md) includes 28 synthetic scenarios for generation, all six refinement tabs, handoff, catch-up and BlueMesa meeting analysis. Compare Nova Pro with another Bedrock model using production prompts, deterministic checks, a fixed Strands Evals judge and a human-review worksheet. A preview is free; paid inference requires an explicit `-Live` flag. The suite does not change the deployed app or customer state.
 
 ## Further Reading
 

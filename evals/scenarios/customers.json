@@ -1,0 +1,376 @@
+{
+  "bluemesa": {
+    "company": "BlueMesa Payments",
+    "industry": "Financial Services",
+    "meetingType": "Technical Deep Dive",
+    "companySize": "Enterprise",
+    "pillars": [
+      "Security",
+      "Reliability",
+      "Operational Excellence",
+      "Performance Efficiency",
+      "Cost Optimization",
+      "Sustainability"
+    ],
+    "context": "Synthetic customer. BlueMesa already operates payment APIs and operational data on AWS in us-east-1 and us-west-2. The initiative adds two payroll design partners without replacing the payment ledger. Current onboarding averages twelve weeks; four weeks is a proposed target, not a delivered result. Discovery funding is approved; implementation funding and launch date are not. The partner interface mix, recovery objectives, retention duration and reconciliation ownership still need validation. Settlement continuity must be protected during payroll cutoff windows.",
+    "companyValues": "Merchant trust, auditable operations, predictable settlement and responsible partner onboarding.",
+    "additionalDirection": "Make payroll integration central to the business case and technical discovery: data flow, partner APIs and encrypted files, reconciliation, ownership, controls and cutover dependencies.",
+    "decisionMakers": [
+      {
+        "name": "Ariana Cole",
+        "title": "Chief Digital Officer",
+        "roleType": "decision-maker",
+        "context": "Executive sponsor; approves program scope and the business case, but has not approved implementation funding."
+      },
+      {
+        "name": "Dev Malik",
+        "title": "VP Infrastructure and Resilience",
+        "roleType": "decision-maker",
+        "context": "Technical authority; requires recovery evidence before production readiness approval."
+      },
+      {
+        "name": "Rachel Kim",
+        "title": "Chief Risk and Compliance Officer",
+        "roleType": "decision-maker",
+        "context": "Control approver for privileged access, payroll data handling and retention."
+      },
+      {
+        "name": "Priya Shah",
+        "title": "Director of Payment Operations",
+        "roleType": "stakeholder",
+        "influence": "high",
+        "stance": "supportive",
+        "context": "Owns reconciliation operations and runbook requirements; does not approve budget or waive controls."
+      }
+    ],
+    "approvedEvidenceSources": [
+      {
+        "sourceTitle": "Approved platform inventory",
+        "content": "BlueMesa payment APIs already operate on AWS in us-east-1 and us-west-2. The ledger is not being replaced."
+      },
+      {
+        "sourceTitle": "Discovery charter",
+        "content": "Discovery is approved for two payroll design partners. Implementation funding, launch date, retention and recovery objectives remain unresolved."
+      }
+    ]
+  },
+  "apex": {
+    "company": "Apex Mutual",
+    "industry": "Financial Services",
+    "meetingType": "Executive Briefing",
+    "companySize": "Enterprise",
+    "pillars": [
+      "Security",
+      "Reliability",
+      "Cost Optimization",
+      "Operational Excellence",
+      "Performance Efficiency",
+      "Sustainability"
+    ],
+    "context": "Synthetic insurer. Its claims portal runs in a leased on-premises data center. A lease renewal in nine months creates a planning deadline, not an approved migration date. A reporting pilot on AWS does not mean the claims portal has migrated. The claims database and third-party document processor have undocumented dependencies. Leadership wants a phased portal migration with rollback evidence and no interruption during catastrophe claims peaks.",
+    "companyValues": "Policyholder trust, clear communication and disciplined use of member premiums.",
+    "additionalDirection": "Separate confirmed data-center workloads from the AWS reporting pilot and ask for a business-case decision before promising savings or a cutover date.",
+    "decisionMakers": [
+      {
+        "name": "Lena Ortiz",
+        "title": "CIO",
+        "roleType": "decision-maker",
+        "context": "Sponsors the portal modernization and will approve the phased plan."
+      },
+      {
+        "name": "Marcus Reed",
+        "title": "CISO",
+        "roleType": "decision-maker",
+        "context": "Requires identity boundaries and control evidence."
+      },
+      {
+        "name": "Anika Rao",
+        "title": "Claims Operations Lead",
+        "roleType": "stakeholder",
+        "context": "Owns peak-period operating requirements and user acceptance."
+      },
+      {
+        "name": "Theo Park",
+        "title": "Finance Controller",
+        "roleType": "stakeholder",
+        "context": "Will validate the baseline costs; has not confirmed any savings percentage."
+      }
+    ]
+  },
+  "northstar": {
+    "company": "Northstar Health",
+    "industry": "Healthcare",
+    "meetingType": "Technical Deep Dive",
+    "companySize": "Enterprise",
+    "pillars": [
+      "Reliability",
+      "Security",
+      "Operational Excellence",
+      "Performance Efficiency",
+      "Cost Optimization",
+      "Sustainability"
+    ],
+    "context": "Synthetic hospital network. Scheduling services run on AWS; clinical records remain in a local hospital system. The network must continue scheduling during WAN outages and reconcile changes when connectivity recovers. The environment is hybrid and cannot be described as fully cloud hosted. The team has not agreed RTO, RPO or data retention. Clinical safety and patient access matter more than a new service catalog.",
+    "companyValues": "Patient access, continuity of care and responsible data stewardship.",
+    "additionalDirection": "Cover scheduling interoperability, duplicate appointments, identity matching, offline workflow and clinical approval gates. Do not claim HIPAA compliance or a BAA without evidence.",
+    "decisionMakers": [
+      {
+        "name": "Sofia Grant",
+        "title": "VP Patient Access",
+        "roleType": "decision-maker",
+        "context": "Approves scheduling process changes."
+      },
+      {
+        "name": "Daniel Brooks",
+        "title": "Director of Enterprise Architecture",
+        "roleType": "stakeholder",
+        "context": "Evaluates integration and recovery design; no budget authority."
+      },
+      {
+        "name": "Imani West",
+        "title": "Clinical Safety Officer",
+        "roleType": "decision-maker",
+        "context": "Approves clinical risk acceptance."
+      },
+      {
+        "name": "Hugo Lin",
+        "title": "Scheduling Operations Manager",
+        "roleType": "stakeholder",
+        "context": "Owns downtime procedures and staff training."
+      }
+    ]
+  },
+  "peakcart": {
+    "company": "PeakCart Retail",
+    "industry": "Retail",
+    "meetingType": "Discovery Call",
+    "companySize": "Mid-market",
+    "pillars": [
+      "Reliability",
+      "Performance Efficiency",
+      "Cost Optimization",
+      "Operational Excellence",
+      "Security",
+      "Sustainability"
+    ],
+    "context": "Synthetic retailer already on AWS. Promotions produce short checkout bursts while a third-party inventory API accepts only fifty requests per second. Payment authorization must respond during checkout, but fulfillment updates can be asynchronous. Backlogs must not create overselling or duplicate shipments. The team has not measured peak conversion losses or acceptable backlog age. There is no approval to replace the inventory vendor.",
+    "companyValues": "Honest inventory promises and dependable delivery.",
+    "additionalDirection": "Discuss backpressure, idempotency and the boundary between synchronous checkout and asynchronous fulfillment. Do not propose queuing every checkout response.",
+    "decisionMakers": [
+      {
+        "name": "Mina Patel",
+        "title": "VP Commerce",
+        "roleType": "decision-maker",
+        "context": "Owns conversion and customer promise decisions."
+      },
+      {
+        "name": "Eli Moss",
+        "title": "Platform Lead",
+        "roleType": "stakeholder",
+        "context": "Will test rate limiting and replay safety."
+      },
+      {
+        "name": "Nora Diaz",
+        "title": "Fulfillment Manager",
+        "roleType": "stakeholder",
+        "context": "Needs backlog age visibility and no duplicate shipments."
+      },
+      {
+        "name": "Leon Wu",
+        "title": "CFO",
+        "roleType": "decision-maker",
+        "context": "Requires measured value before new spend."
+      }
+    ]
+  },
+  "forgeworks": {
+    "company": "ForgeWorks Manufacturing",
+    "industry": "Manufacturing",
+    "meetingType": "Technical Deep Dive",
+    "companySize": "Enterprise",
+    "pillars": [
+      "Reliability",
+      "Security",
+      "Operational Excellence",
+      "Cost Optimization",
+      "Performance Efficiency",
+      "Sustainability"
+    ],
+    "context": "Synthetic manufacturer. Factory control loops run locally and must keep running during internet loss. Quality-inspection telemetry can be forwarded to AWS after connectivity returns. Plant networks have intermittent connectivity and separate safety ownership. No one has approved remote control of equipment, moving PLC logic to the cloud or stopping a production line for a pilot.",
+    "companyValues": "Worker safety, production continuity and transparent quality evidence.",
+    "additionalDirection": "Keep local control and telemetry analysis separate. Ask about buffering, replay, clock drift, network segmentation and plant acceptance windows.",
+    "decisionMakers": [
+      {
+        "name": "Ruth Ellis",
+        "title": "Plant Director",
+        "roleType": "decision-maker",
+        "context": "Approves pilot windows and operational changes."
+      },
+      {
+        "name": "Owen Hale",
+        "title": "OT Security Lead",
+        "roleType": "decision-maker",
+        "context": "Approves plant network boundaries."
+      },
+      {
+        "name": "Mei Stone",
+        "title": "Quality Engineer",
+        "roleType": "stakeholder",
+        "context": "Defines evidence needs and timestamp interpretation."
+      },
+      {
+        "name": "Luis Shah",
+        "title": "Cloud Platform Engineer",
+        "roleType": "stakeholder",
+        "context": "Evaluates telemetry ingestion; no authority over safety controls."
+      }
+    ]
+  },
+  "lumenstream": {
+    "company": "LumenStream Media",
+    "industry": "Media",
+    "meetingType": "Technical Deep Dive",
+    "companySize": "Mid-market",
+    "pillars": [
+      "Performance Efficiency",
+      "Reliability",
+      "Cost Optimization",
+      "Security",
+      "Operational Excellence",
+      "Sustainability"
+    ],
+    "context": "Synthetic streaming publisher on AWS. Viewers in India report slow video startup while North American viewers do not. The team lacks region-specific startup and rebuffering measurements. Subscription entitlements and licensing restrictions must be preserved. A multi-region rewrite is not approved and must not be the first assumed answer.",
+    "companyValues": "Accessible viewing and respect for licensing commitments.",
+    "additionalDirection": "Separate origin latency, CDN cache behavior, network variability and entitlement checks. Ask for regional evidence before proposing a rebuild.",
+    "decisionMakers": [
+      {
+        "name": "Asha Raman",
+        "title": "VP Viewer Experience",
+        "roleType": "decision-maker",
+        "context": "Owns playback outcome targets."
+      },
+      {
+        "name": "Ben Cho",
+        "title": "Streaming Architect",
+        "roleType": "stakeholder",
+        "context": "Will collect playback and cache evidence."
+      },
+      {
+        "name": "Tessa Reed",
+        "title": "Rights Director",
+        "roleType": "decision-maker",
+        "context": "Approves regional licensing constraints."
+      },
+      {
+        "name": "Amir Ford",
+        "title": "FinOps Analyst",
+        "roleType": "stakeholder",
+        "context": "Needs traffic and transfer cost baselines."
+      }
+    ]
+  },
+  "cedar": {
+    "company": "CedarCloud Analytics",
+    "industry": "SaaS",
+    "meetingType": "Executive Briefing",
+    "companySize": "Mid-market",
+    "pillars": [
+      "Cost Optimization",
+      "Reliability",
+      "Security",
+      "Operational Excellence",
+      "Performance Efficiency",
+      "Sustainability"
+    ],
+    "context": "Synthetic SaaS vendor. Its AWS bill rose after adding tenant analytics, but cost allocation is incomplete and no reliable cost-per-tenant baseline exists. Enterprise commitments require predictable latency. Sales suggested forty percent savings but has no supporting calculation. There is no decision to buy long-term commitments or reduce resilience.",
+    "companyValues": "Predictable customer value, transparent unit economics and dependable service.",
+    "additionalDirection": "Build an evidence-led unit-economics discussion. Treat any savings percentage as unvalidated and preserve customer service commitments.",
+    "decisionMakers": [
+      {
+        "name": "Helen Das",
+        "title": "CFO",
+        "roleType": "decision-maker",
+        "context": "Approves spend commitments after baseline validation."
+      },
+      {
+        "name": "Ravi Chen",
+        "title": "CTO",
+        "roleType": "decision-maker",
+        "context": "Owns service reliability tradeoffs."
+      },
+      {
+        "name": "Ella Cruz",
+        "title": "Customer Success Lead",
+        "roleType": "stakeholder",
+        "context": "Provides contractual latency expectations."
+      },
+      {
+        "name": "Sam Wood",
+        "title": "FinOps Engineer",
+        "roleType": "stakeholder",
+        "context": "Will establish allocation and unit costs."
+      }
+    ]
+  },
+  "harbor": {
+    "company": "HarborRoutes Logistics",
+    "industry": "Other",
+    "meetingType": "Discovery Call",
+    "companySize": "Enterprise",
+    "pillars": [
+      "Security",
+      "Reliability",
+      "Operational Excellence",
+      "Cost Optimization",
+      "Performance Efficiency",
+      "Sustainability"
+    ],
+    "context": "Synthetic logistics group. European customer shipment records must remain in approved European regions under its internal policy. US operations currently use a separate AWS workload. Legal has not approved cross-region data sharing or a common analytics store. Regional policy is a customer requirement, not a legal opinion or proof of regulatory compliance.",
+    "companyValues": "Customer confidentiality and reliable shipment visibility.",
+    "additionalDirection": "Keep regional boundaries explicit, distinguish customer policy from legal advice, and identify data-flow and approval evidence before proposing replication.",
+    "decisionMakers": [
+      {
+        "name": "Ada Miller",
+        "title": "Data Governance Director",
+        "roleType": "decision-maker",
+        "context": "Approves internal data sharing policy."
+      },
+      {
+        "name": "Jan Kaur",
+        "title": "Regional Operations Lead",
+        "roleType": "stakeholder",
+        "context": "Defines shipment visibility requirements."
+      },
+      {
+        "name": "Chris Vega",
+        "title": "Enterprise Architect",
+        "roleType": "stakeholder",
+        "context": "Maps regional dependencies."
+      },
+      {
+        "name": "Leila Ross",
+        "title": "Legal Counsel",
+        "roleType": "decision-maker",
+        "context": "Must review contractual boundaries; no legal approval exists yet."
+      }
+    ]
+  },
+  "seedspark": {
+    "company": "SeedSpark",
+    "industry": "SaaS",
+    "meetingType": "Discovery Call",
+    "companySize": "Startup",
+    "pillars": [
+      "Cost Optimization",
+      "Reliability",
+      "Security",
+      "Performance Efficiency",
+      "Operational Excellence",
+      "Sustainability"
+    ],
+    "context": "Synthetic startup building scheduling software. Hosting provider, traffic, customer count, budget and recovery objectives are unknown. The founder wants to discuss readiness for a first business customer. No evidence supports healthcare, financial-services, regulatory or multi-region requirements.",
+    "companyValues": "Simple workflows and honest customer commitments.",
+    "additionalDirection": "Create discovery questions and explicitly labeled assumptions instead of inventing a stack, scale, compliance regime, stakeholder names or a budget.",
+    "decisionMakers": []
+  }
+}

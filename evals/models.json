@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "models": {
+    "nova-pro": {
+      "modelId": "us.amazon.nova-pro-v1:0",
+      "inputUsdPerMillion": null,
+      "outputUsdPerMillion": null
+    },
+    "nova-micro": {
+      "modelId": "us.amazon.nova-micro-v1:0",
+      "inputUsdPerMillion": null,
+      "outputUsdPerMillion": null
+    },
+    "sonnet": {
+      "modelId": "global.anthropic.claude-sonnet-4-6",
+      "inputUsdPerMillion": null,
+      "outputUsdPerMillion": null
+    }
+  }
+}

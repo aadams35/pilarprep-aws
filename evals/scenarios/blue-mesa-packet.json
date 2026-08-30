@@ -1,0 +1,57 @@
+{
+  "fixtureNote": "Hand-authored synthetic comparison baseline, never counted as a model response. Several explicitly labeled assumptions are intentionally wrong for meeting-correction tests.",
+  "businessCase": {
+    "scenario": "BlueMesa Payments is preparing discovery for two payroll design partners on its existing AWS payment platform. The business objective is faster partner onboarding without weakening settlement confidence or replacing the ledger. Sales needs a bounded value story, and the SA needs interface, reconciliation and control evidence before recommending implementation.",
+    "whyNow": "Partner demand creates urgency, but BlueMesa has approved discovery only. The team should use the next conversation to agree which onboarding delays are addressable and which dependencies must be resolved before making a funding request or committing to production readiness.",
+    "currentSituation": "Payment APIs and operational data already operate on AWS. The ledger remains in place. Interface patterns, recovery objectives and reconciliation ownership have not been confirmed. Working assumptions currently favor API-first connectivity for both partners and seven-year retention, subject to explicit customer correction.",
+    "desiredOutcomes": "The proposed onboarding objective is to move from a twelve-week baseline toward four weeks for the initial design partners. This is a target to validate, not an achieved saving or delivery commitment. Settlement accuracy, control evidence and clear operational ownership must remain visible throughout discovery.",
+    "successCriteria": "Success means agreement on the two-partner boundary, an evidence-backed interface decision, named reconciliation and control owners, and explicit criteria for a subsequent funding decision. No recovery threshold, retention policy or launch date should be presented as approved without customer confirmation.",
+    "businessRisks": "Payroll cutoff disruption, duplicate events, reconciliation gaps and unreviewed retention are material concerns. Platform capacity and partner certification dependencies are still assumptions. The team should validate impact and ownership before attaching severity or promising that a particular architecture eliminates those risks.",
+    "decisionRequired": "The next meeting should authorize a bounded discovery work plan and evidence owners. It should not be represented as implementation approval, procurement authorization or a production go-live decision. Ariana will need a substantiated business case before those later commitments can be discussed.",
+    "inScope": "Discovery covers payroll partner interfaces, data flow, reconciliation responsibility, privileged access, recovery evidence and operational readiness. Sales should connect those topics to onboarding value, while the SA identifies the evidence needed to test feasibility on the existing payment platform.",
+    "outOfScope": "Replacing the ledger, committing a launch date, confirming implementation funding and granting compliance approval are outside this discovery packet. They require separate customer decisions and supporting evidence.",
+    "assumptionsAndUnknowns": "API-first connectivity for both partners, seven-year retention and spare platform capacity are working assumptions only. Funding beyond discovery, recovery targets and the first launch window remain unknown. Ask the customer to correct each assumption and identify the appropriate evidence owner.",
+    "stakeholderAlignment": "Ariana Cole sponsors the business outcome, Dev Malik governs technical readiness, Rachel Kim approves controls, and Priya Shah shapes reconciliation operations. Priya is a high-influence stakeholder, not a budget approver. Each perspective should be represented without inventing authority or commitments.",
+    "alignmentStatement": "Start by confirming that BlueMesa wants bounded payroll partner onboarding on its existing AWS platform while preserving the ledger and settlement confidence. Invite corrections before discussing implementation options, and explicitly separate confirmed facts from discovery assumptions.",
+    "nextStepGuidance": "Assign an interface inventory to the technical team, obtain Rachel's control evidence requirements and ask Priya to map reconciliation responsibilities. These are recommended next steps, not completed commitments. Close with evidence dependencies and a proposed meeting for the next customer decision."
+  },
+  "technical": [
+    "BlueMesa Payments needs an interface inventory before choosing a payroll integration design. Security is the first ranked priority, but partner constraints and reconciliation must be understood alongside access boundaries. Ask: Which partner APIs, encrypted-file interfaces and replay requirements can Dev Malik confirm with evidence?",
+    "BlueMesa Payments must preserve settlement behavior when a payroll event is duplicated, delayed or rejected. Security controls and operational recovery need explicit owners rather than assumed service features. Ask: How will Priya Shah reconcile exceptions and verify that retries do not create a duplicate financial operation?",
+    "BlueMesa Payments has not confirmed payroll retention or recovery objectives. Rachel Kim's control evidence and Dev Malik's resilience testing should determine the design boundary. Ask: Which data classes, retention decisions and recovery tests must be approved before a partner can proceed beyond discovery?",
+    "BlueMesa Payments should validate a bounded integration path while leaving the ledger unchanged. Security and reliability tradeoffs need partner certification evidence and a clear rollback boundary. Ask: Which dependencies and named owners will determine whether the initial two-partner design is ready for review?"
+  ],
+  "executive": [
+    "BlueMesa Payments wants faster payroll partner onboarding without undermining customer trust. Ariana Cole should validate whether the proposed four-week target addresses the actual source of delay. Security remains a business commitment rather than a product list. Ask: Which measured outcome would justify the next funding discussion?",
+    "BlueMesa Payments has approved discovery, not implementation. Ariana Cole needs a bounded scope, credible dependencies and a shared definition of success before asking for additional investment. Security evidence supports that decision. Ask: What must the team demonstrate before a wider commitment is appropriate?",
+    "BlueMesa Payments must preserve settlement confidence as partner onboarding improves. Rachel Kim's control expectations and Priya Shah's operating requirements should shape the value case. Security cannot be treated as a late sign-off. Ask: Which customer or operational harm would make a proposed shortcut unacceptable?",
+    "BlueMesa Payments needs a decision-led follow-up rather than an assumed launch schedule. Ariana Cole should receive evidence owners, unresolved questions and options tied to onboarding value. Security and operational readiness remain explicit gates. Ask: Who should join the next discussion to resolve the largest open dependency?"
+  ],
+  "stakeholders": [
+    "Ariana Cole - Chief Digital Officer: Sponsors BlueMesa's payroll onboarding business case and confirms the discovery boundary. She has not committed implementation funding. Align the value story to merchant trust and measured progress. Ask: Which outcomes and evidence would support the next sponsor decision?",
+    "Dev Malik - VP Infrastructure and Resilience: Governs technical readiness on BlueMesa's existing AWS payment platform. He needs interface and recovery evidence, not an assumed migration plan. Ask: Which integration dependencies must be validated before the team can endorse a bounded design?",
+    "Rachel Kim - Chief Risk and Compliance Officer: Approves payroll control requirements, privileged access and retention. Her decision cannot be inferred from a generic compliance label. Ask: What evidence is required before a retention or access design can be accepted?",
+    "Priya Shah - Director of Payment Operations: Influences requirements through reconciliation and runbook ownership. She is not a budget approver and cannot waive Rachel's control requirements. Ask: What failure and exception evidence would make the payroll operating process dependable?"
+  ],
+  "gameplan": [
+    "Open with BlueMesa's payroll onboarding objective and the unchanged ledger boundary. Confirm that the existing AWS platform is the starting point, then invite the customer to correct assumptions before suggesting options. Ask: Does this scope reflect the decision you need from today's discussion?",
+    "Use the middle of the discussion to validate partner interfaces, retention, reconciliation and recovery evidence. Bring Dev Malik and Rachel Kim into tradeoffs while keeping Priya Shah's operating constraints visible. Ask: Which current assumption would most change our recommended next step?",
+    "Convert unknowns into named evidence requests rather than premature design commitments. Sales should connect each request to onboarding value, while the SA explains why it affects feasibility or control acceptance. Ask: Who can provide the missing evidence and what dependency could delay it?",
+    "Close with the discovery decision, unresolved risks and the purpose of the next working session. Do not equate agreement to investigate with permission to implement or launch. Ask: What evidence and participants do we need before the next funding or readiness gate?"
+  ],
+  "objections": [
+    "Concern: Payroll integration could disrupt settlement. Response: Bound the initial partner scope, document failure paths and obtain reconciliation evidence before recommending implementation. Preserve Security and Reliability as explicit acceptance gates rather than promising risk-free change. Ask: Which payroll cutoff failure would be unacceptable to operations?",
+    "Concern: The value case is unclear. Response: Validate the twelve-week onboarding baseline and proposed four-week target with Ariana Cole, then separate measurable improvement from assumptions. Discovery should produce evidence for a funding decision, not invented ROI. Ask: What outcome would justify a controlled next investment?",
+    "Concern: Retention may be over-specified. Response: Treat seven years as an assumption until Rachel Kim confirms the required policy, data classes and ownership. Do not equate longer retention with stronger compliance. Ask: What source establishes the correct retention decision for payroll partner data?",
+    "Concern: The platform team may lack capacity. Response: Validate technical ownership and dependencies before setting dates. A bounded payroll design still needs real operating and review capacity, not only an architecture diagram. Ask: Who can commit the required evidence and review time before the next gate?"
+  ],
+  "projectAnswer": "Discovery is approved for two payroll partners on the existing AWS platform. Implementation funding, recovery objectives and retention remain unresolved. Ariana Cole, Dev Malik, Rachel Kim and Priya Shah must validate business, technical, control and operational expectations before the next gate.",
+  "projectArtifacts": {},
+  "citations": [
+    "Customer context",
+    "Decision-maker notes",
+    "Stakeholder notes",
+    "Discovery charter"
+  ],
+  "evidence": []
+}
