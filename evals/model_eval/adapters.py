@@ -110,7 +110,10 @@ def validate_output(case: dict, output: dict, prompts: dict) -> list[dict]:
         if case["action"] == "brief.generate":
             brief._validate_generation_route(output, brief.REFINEMENT_TARGETS)
         elif case["action"] == "brief.refine":
-            brief._validate_complete_refinement_target(output, case["request"])
+            normalized = copy.deepcopy(output)
+            if case["target"] == "objections":
+                normalized["objections"] = brief._canonical_objections(output.get("objections"))
+            brief._validate_complete_refinement_target(normalized, case["request"])
         elif case["action"] == "handoff.generate":
             if set(output) != {"projectAnswer", "projectArtifacts", "projectUpdate", "citations"}:
                 raise ValueError("Handoff must contain only the required top-level fields.")

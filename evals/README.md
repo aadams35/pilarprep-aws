@@ -91,6 +91,10 @@ Candidate identity is withheld from the judge, and candidate ordering is randomi
 
 The judge uses the open-source [Strands Evals SDK](https://github.com/strands-agents/evals), pinned in [requirements.txt](requirements.txt). It is not a new service in the production architecture.
 
+The grading rubric and scenario acceptance criteria are trusted system instructions. All customer context, baseline packets, transcripts and candidate responses remain inside the Guardrail's screened evidence block. This avoids treating the judge's own grading instructions as a customer prompt attack without exempting candidate content or disabling the policy. Genuine blocks produce `candidate_blocked` or `judge_blocked`, never a fabricated score. Rule type, confidence and processing units are recorded without copying matched sensitive text from the Guardrail trace.
+
+Objection objects are normalized to the same `Concern` / `Response` / `Ask` format used in production before completeness checks. Missing fields and cross-tab changes still fail; the original generated response is preserved in the report.
+
 ## Reports
 
 Each paid run creates an ignored directory at `outputs/model-evals/<run-id>/`:
@@ -104,6 +108,8 @@ Each paid run creates an ignored directory at `outputs/model-evals/<run-id>/`:
 | `review.csv` | Blank human scores, factual errors and notes; never populated with invented reviews |
 
 Reports are checkpointed after each trial, including failures. Interrupted runs retain completed work. `results.json` records the Git commit, dataset/prompt hashes, package versions, Guardrail version and inference settings. Do not publish these output directories if you later adapt the suite to private data.
+
+`checkStatus` preserves the structural result even if judging subsequently fails. `judge_blocked`, `judge_error` and `judge_budget_skipped` mean the output has no quality score. Inspect per-call `guardrail` decisions and `stopReason` before attributing these failures to the candidate model.
 
 Exit codes: `0` means all requested trials passed their enabled checks; `1` means evaluation failures, errors or budget skips; `2` means setup/plan failure; `130` means interruption. Without a judge, success is explicitly `checks_passed`, not a quality endorsement. A rerun creates a new directory and invokes the models again; it does not resume for free.
 
@@ -120,6 +126,7 @@ The SDK sends candidate and judge requests with the configured Guardrail. Missin
 - `-MaxTokens` defaults to 4,800 output tokens **per candidate route**, with 1,600 for the judge. A generated packet uses three routes; other actions use one.
 - Costs include candidate tokens, judge tokens and Guardrail processing. No free-tier eligibility is assumed.
 - Optional per-million-token rates in [models.json](models.json) start at `null`. Fill them only after checking the exact model, region and inference tier against [official Bedrock pricing](https://aws.amazon.com/bedrock/pricing/). Reports label missing rates/usage unknown, never zero.
+- [pricing/2026-08-30.json](pricing/2026-08-30.json) is a dated standard-inference snapshot for the initial three-model comparison. Pass `--model-config evals/pricing/2026-08-30.json` to reproduce its token estimates. Recheck prices before future runs; it is not a live price feed.
 - Reported cost is a token-only estimate, not an AWS bill. It excludes Guardrail processing and other service charges. Candidate and judge calls are individually recorded; shared judge cost appears in each candidate's total.
 
 ## What This Benchmark Does Not Prove

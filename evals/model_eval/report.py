@@ -26,6 +26,8 @@ def summarize(rows: list[dict]) -> list[dict]:
         costs = [call.get("estimatedTokenCostUsd") for call in calls]
         summaries.append({
             "model": model, "trials": len(trials), "generated": len(generated),
+            "candidateBlocked": sum(trial.get("status") == "candidate_blocked" for trial in trials),
+            "judgeBlocked": sum(trial.get("status") == "judge_blocked" for trial in trials),
             "checksPassed": sum(bool(trial.get("checks")) and all(check["passed"] for check in trial["checks"]) for trial in trials),
             "qualityPassed": sum(trial.get("status") == "passed" for trial in trials),
             "judgeCoverage": len(scored), "judgeMeanOutOf10": round(mean(scored), 2) if scored else None,
@@ -64,7 +66,7 @@ def write_reports(directory: Path, manifest: dict, rows: list[dict]):
         if row.get("error"):
             issues.append(row["error"])
         lines.append(f"| {_cell(row['caseId'])} | {_cell(row['model'])} | {row['repeat']} | {_cell(row['status'])} | {_cell((row.get('judge') or {}).get('scoreOutOf10'))} | {_cell('; '.join(issues) or 'Inspect output and judge reasoning')} |")
-    lines.extend(["", "## Review Notes", "", "- `results.json` contains raw model output, every call's timing/usage, deterministic checks and the judge's explanation.", "- `review.csv` is a human-review worksheet; blank scores are deliberately not populated by the model.", "- Generation latency excludes the judge and contains no SQS queue wait. Failed and budget-skipped trials stay in the denominator.", "- No retry, repair or demo fallback is applied to candidate responses. Strands may make multiple judge calls; all count toward the hard limit.", "- Keep the same judge, prompts, evidence and inference settings when comparing runs. A judge can favor its own model family; manually review samples and rerun finalists.", ""])
+    lines.extend(["", "## Review Notes", "", "- `results.json` contains raw model output, every call's timing/usage, deterministic checks and the judge's explanation.", "- `candidate_blocked` and `judge_blocked` identify the screened phase. Per-call Guardrail diagnostics retain rule decisions, not matched text. A blocked judge has no quality score; structural checks remain in `checkStatus`.", "- `review.csv` is a human-review worksheet; blank scores are deliberately not populated by the model.", "- Generation latency excludes the judge and contains no SQS queue wait. Failed and budget-skipped trials stay in the denominator.", "- No retry, repair or demo fallback is applied to candidate responses. Strands may make multiple judge calls; all count toward the hard limit.", "- Keep the same judge, prompts, evidence and inference settings when comparing runs. A judge can favor its own model family; manually review samples and rerun finalists.", ""])
     (directory / "report.md").write_text("\n".join(lines), encoding="utf-8")
     with (directory / "summary.csv").open("w", newline="", encoding="utf-8") as stream:
         if summary:

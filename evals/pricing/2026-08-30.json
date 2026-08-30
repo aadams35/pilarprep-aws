@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "models": {
+    "nova-pro": {
+      "modelId": "us.amazon.nova-pro-v1:0",
+      "inputUsdPerMillion": 0.8,
+      "outputUsdPerMillion": 3.2,
+      "priceCheckedAt": "2026-08-30",
+      "priceScope": "Standard on-demand inference, us-east-1",
+      "priceSource": "AWS Price List API: AmazonBedrock, Nova Pro, On-demand Inference, effective 2026-08-01"
+    },
+    "nova-micro": {
+      "modelId": "us.amazon.nova-micro-v1:0",
+      "inputUsdPerMillion": 0.035,
+      "outputUsdPerMillion": 0.14,
+      "priceCheckedAt": "2026-08-30",
+      "priceScope": "Standard on-demand inference, us-east-1",
+      "priceSource": "AWS Price List API: AmazonBedrock, Nova Micro, On-demand Inference, effective 2026-08-01"
+    },
+    "sonnet": {
+      "modelId": "global.anthropic.claude-sonnet-4-6",
+      "inputUsdPerMillion": 3.0,
+      "outputUsdPerMillion": 15.0,
+      "priceCheckedAt": "2026-08-30",
+      "priceScope": "AWS Bedrock standard global cross-region inference",
+      "priceSource": "https://www-cdn.anthropic.com/files/4zrzovbb/website/3684c2faafb97418665782cea0001f439f74b1d2.pdf, page 5, dated 2026-05-27"
+    }
+  }
+}

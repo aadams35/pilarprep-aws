@@ -102,7 +102,7 @@ def safe_error(error):
 
 def execute(args, cases, models, judge):
     from .adapters import build_prompts, generate, validate_output
-    from .inference import BudgetExceeded, CallBudget, MeteredClient, judge_output, require_judge_dependencies
+    from .inference import BudgetExceeded, CallBudget, GuardrailBlocked, MeteredClient, judge_output, require_judge_dependencies
 
     # Fail on local input/prompt errors before creating a run or invoking any model.
     prompts = {case["id"]: build_prompts(case) for case in cases}
@@ -117,7 +117,7 @@ def execute(args, cases, models, judge):
         "mode": "direct-model-quality", "region": args.region, "models": models, "judge": judge,
         "caseIds": [case["id"] for case in cases], "datasetHash": fingerprint(cases),
         "promptHashes": {name: value["promptHash"] for name, value in prompts.items()},
-        "settings": {"temperature": 0.1, "maxTokens": args.max_tokens, "judgeMaxTokens": 1600, "latencyTier": "standard", "promptProfile": "fixed-nova-pro", "repeats": args.repeats, "seed": args.seed, "maxCalls": args.max_calls, "timeoutSeconds": args.timeout},
+        "settings": {"temperature": 0.1, "maxTokens": args.max_tokens, "judgeMaxTokens": 1600, "judgePromptVersion": "scoped-evidence-v2", "latencyTier": "standard", "promptProfile": "fixed-nova-pro", "repeats": args.repeats, "seed": args.seed, "maxCalls": args.max_calls, "timeoutSeconds": args.timeout},
         "guardrail": guardrail, "status": "running", "customerStateWrites": False,
         "limitations": ["Frozen evidence, not live retrieval", "Direct Bedrock text reasoning, not AgentCore tool orchestration", "No queue, authentication or audio transcription test", "AI scores need human review", "Candidate calls are first-attempt with no repair or fallback"],
     }
@@ -151,16 +151,23 @@ def execute(args, cases, models, judge):
                 row["generationMs"] = round((time.monotonic() - started) * 1000)
                 row["checks"] = validate_output(case, row["output"], prompts[case["id"]])
                 row["status"] = "checks_passed" if all(check["passed"] for check in row["checks"]) else "checks_failed"
+                row["checkStatus"] = row["status"]
                 if judge:
                     try:
                         row["judge"] = judge_output(case, row["output"], prompts[case["id"]], session=session, client_config=client_config, config=judge, budget=budget, calls=row["calls"], guardrail=guardrail)
                         if row["status"] == "checks_passed":
                             row["status"] = "passed" if row["judge"]["test_pass"] else "quality_failed"
+                    except GuardrailBlocked as error:
+                        row["status"], row["error"] = "judge_blocked", str(error)
+                    except BudgetExceeded as error:
+                        row["status"], row["error"] = "judge_budget_skipped", str(error)
                     except Exception as error:
                         row["status"] = "judge_error"
                         row["error"] = safe_error(error)
             except BudgetExceeded as error:
                 row["status"], row["error"] = "budget_skipped", str(error)
+            except GuardrailBlocked as error:
+                row["status"], row["error"] = "candidate_blocked", str(error)
             except Exception as error:
                 row["status"], row["error"] = "error", safe_error(error)
             row["totalMs"] = round((time.monotonic() - started) * 1000)
