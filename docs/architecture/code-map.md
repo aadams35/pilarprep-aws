@@ -5,6 +5,7 @@ Use the same labels as the [architecture diagram](pilarprep-aws-architecture.png
 | Diagram component | Application code | Infrastructure |
 | --- | --- | --- |
 | PilarPrep React app | [App](../../frontend/src/App.tsx), [browser clients](../../frontend/src/lib/) | [Frontend](../../infrastructure/frontend.yaml) |
+| Route 53 | DNS lookup only; no application handler | Live `pilarprep.app` public hosted zone with A/AAAA aliases to CloudFront; DNS is configured separately from the [frontend template](../../infrastructure/frontend.yaml), as described in [deployment](../../DEPLOYMENT.md) |
 | CloudFront and frontend S3 | [Browser entry](../../frontend/src/main.tsx), [build](../../vite.config.ts) | [Frontend](../../infrastructure/frontend.yaml) |
 | AWS WAF | Edge protection; no separate application handler | [CloudFront Web ACL association and optional managed ACL](../../infrastructure/frontend.yaml) |
 | Cognito | [Workspace authentication](../../frontend/src/lib/cognito-auth.ts), [guest signing](../../frontend/src/lib/aws-sigv4.ts), [server scope](../../backend/pipeline/state.py) | [Jobs pipeline](../../infrastructure/jobs-pipeline.yaml), [core Bedrock stack](../../infrastructure/bedrock.yaml) |

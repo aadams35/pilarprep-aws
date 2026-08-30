@@ -28,7 +28,7 @@ The shared request path is **React -> API Gateway -> Jobs API Lambda -> SQS -> A
 
 The two audio events return to the same queue: first the malware-scan result, then the transcription result. "Validate + save" is code inside the AI Worker, not an extra deployed Lambda.
 
-The diagram also shows WAF edge protection, the SQS dead-letter queue, and the shared monitoring, alerting, encryption, and secret-management services. AgentCore remains one box so its internal tools and memory do not distract from the main routes. Meeting interpretation and packet corrections use Bedrock through Strands; customer context is not PII-screened or redacted by Comprehend.
+The diagram also shows Route 53 DNS, WAF edge protection, the SQS dead-letter queue, and the shared monitoring, alerting, encryption, and secret-management services. Route 53 resolves `pilarprep.app` to CloudFront; its dashed DNS connection is separate from the solid application request path. AgentCore remains one box so its internal tools and memory do not distract from the main routes. Meeting interpretation and packet corrections use Bedrock through Strands; customer context is not PII-screened or redacted by Comprehend.
 
 See [Architecture](ARCHITECTURE.md) for the request flows and current tradeoffs. The [code map](docs/architecture/code-map.md) connects every diagram box to its implementation or infrastructure definition.
 
