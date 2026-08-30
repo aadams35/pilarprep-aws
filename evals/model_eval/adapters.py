@@ -38,7 +38,8 @@ def build_prompts(case: dict, *, guardrails: bool = True) -> dict:
         evidence = request.get("approvedEvidenceSources", [])
         labels = list(dict.fromkeys(["Approved brief", "Customer context", "Decision-maker notes", "Stakeholder notes", "Discovery charter", *[source["sourceTitle"] for source in evidence]]))
         context = service._prompt(agent_request, latest, state, None, labels, evidence)
-        parts.append({"route": action, "sections": [], "system": service.CATCHUP_SYSTEM_PROMPT if action == "catchup.generate" else service.SYSTEM_PROMPT, "content": [{"text": context}]})
+        content = service._agent_prompt_content(context, service._guarded_user_content(json.loads(context))) if guardrails else [{"text": context}]
+        parts.append({"route": action, "sections": [], "system": service.CATCHUP_SYSTEM_PROMPT if action == "catchup.generate" else service.SYSTEM_PROMPT, "content": content})
     else:
         evidence = {"meetingTranscript": case["transcript"], "approvedBrief": case["previous"], "scenarioContext": request, "retrievedEvidence": request.get("approvedEvidenceSources", []), "currentProjectState": {}}
         parts.append({"route": action, "sections": [], "system": meeting.MEETING_SYSTEM_PROMPT, "content": meeting._meeting_prompt_content(evidence, guardrail_enabled=guardrails)})
@@ -167,10 +168,8 @@ def parse_response(response: dict) -> dict:
     if response.get("stopReason") not in {"end_turn", "stop_sequence"}:
         raise ValueError("Generation did not complete cleanly: " + str(response.get("stopReason")))
     text = "".join(item.get("text", "") for item in response.get("output", {}).get("message", {}).get("content", []))
-    value = json.loads(text)
-    if not isinstance(value, dict):
-        raise ValueError("Model output must be one JSON object, not a list or explanation.")
-    return value
+    brief, _service, _meeting = production_modules()
+    return brief._parse_json_object(text)
 
 
 def generate(case: dict, prompts: dict, client, model_id: str, max_tokens: int) -> dict:

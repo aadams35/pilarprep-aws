@@ -95,6 +95,8 @@ The grading rubric and scenario acceptance criteria are trusted system instructi
 
 Objection objects are normalized to the same `Concern` / `Response` / `Ask` format used in production before completeness checks. Missing fields and cross-tab changes still fail; the original generated response is preserved in the report.
 
+The parser also uses the production JSON-object parser, which accepts a code fence around an otherwise valid response. This is formatting normalization, not a model retry or content repair: invalid JSON, multiple objects and truncated responses still fail. Handoff and catch-up use the production guarded-content helper, screening new focus and meeting-outcome input separately from trusted orchestration instructions and already-approved fixture context.
+
 ## Reports
 
 Each paid run creates an ignored directory at `outputs/model-evals/<run-id>/`:
@@ -133,7 +135,7 @@ The SDK sends candidate and judge requests with the configured Guardrail. Missin
 
 The adapters reuse the application's prompt builders and validators, but intentionally freeze the **Nova Pro prompt profile**, temperature `0.1`, standard latency tier, evidence and output limits for every candidate. This isolates model choice; it does not reproduce Micro's model-specific tuning, production repair loops or optimized inference settings. The judge uses temperature `0`.
 
-Handoff, catch-up and meeting cases call Bedrock directly with the production reasoning prompts. They do not run the deployed Strands tools or AgentCore Runtime. Retrieval evidence is frozen rather than queried from the Knowledge Base. There is no authentication, customer-isolation, queue, S3/DynamoDB persistence, audio processing or full-browser test here. Generation time excludes judge time and contains no SQS wait.
+Handoff, catch-up and meeting cases call Bedrock directly with the production reasoning prompts. They do not run the deployed Strands tools, its structured-output schema injection, repair loop or AgentCore Runtime. First-attempt JSON field errors here do not by themselves establish a production failure. Retrieval evidence is frozen rather than queried from the Knowledge Base. There is no authentication, customer-isolation, queue, S3/DynamoDB persistence, audio processing or full-browser test here. Generation time excludes judge time and contains no SQS wait.
 
 Some production contradiction rules are deliberately lexical and can flag negated mentions such as "not on-premises." Review those failures separately from actual factual errors. Keyword matches and source-label checks cannot establish semantic entailment. The judge and human review cover that gap, imperfectly.
 
