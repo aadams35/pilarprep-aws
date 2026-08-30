@@ -64,7 +64,7 @@ These services support the main routes rather than adding more processing stages
 
 Comprehend performs text detection, GuardDuty scans uploaded files for malware, and Bedrock Guardrails enforce AI content policies. These are separate checks. Preserving a detected name does not prevent the Comprehend request or its text-processing charge.
 
-The two Comprehend arrows show a synchronous request and response: the worker sends text, receives detected entities and their locations, then applies PilarPrep's preservation, redaction, or blocking rules before continuing. Comprehend does not forward the job to Bedrock or start another Lambda invocation. AgentCore uses the same call-and-return pattern within its runtime. The return arrow is not a new queue job or a retry loop.
+The short, two-way Comprehend connector above the worker is a synchronous side call, not another workflow branch. The worker sends text, receives detected entities and their locations, then applies PilarPrep's preservation, redaction, or blocking rules before continuing. Comprehend does not forward the job to Bedrock or start another Lambda invocation. AgentCore uses the same call-and-return pattern within its runtime. The connector does not represent a new queue job or a retry loop.
 
 The supporting services above were checked against source/IaC and read-only deployed-resource queries on August 30, 2026. The live worker has content safety and PII screening enabled. WAF is attached to CloudFront through the existing external Web ACL rather than a new managed ACL created by this repository. No infrastructure was changed for this diagram update.
 
