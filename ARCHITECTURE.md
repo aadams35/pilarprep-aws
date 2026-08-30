@@ -54,7 +54,6 @@ These services support the main routes rather than adding more processing stages
 | Service | Role |
 | --- | --- |
 | AWS WAF | Protects the CloudFront edge, including rate-limiting rules. The signed-in workspace's `/api/` requests also travel through CloudFront; the React-to-API line is a logical connection. |
-| Amazon Comprehend | The AI Worker and AgentCore call `DetectPiiEntities` on eligible input/output text. Names are preserved. The private meeting-processing, meeting-approval, and meeting-analysis actions bypass Comprehend screening to retain full context; Bedrock Guardrails still apply. |
 | SQS dead-letter queue | Retains repeatedly failed deliveries after the source queue's three-receive limit, for up to 14 days. It is a failure destination, not a parallel generation path or an automatic replay loop. |
 | CloudWatch and X-Ray | Collect logs, application/service metrics, and enabled Lambda traces. Alarms cover failures, queue backlog, and processing delays. |
 | Amazon SNS | Receives operations-alarm notifications. Email delivery additionally requires a configured and confirmed subscription. |
@@ -62,11 +61,11 @@ These services support the main routes rather than adding more processing stages
 | Secrets Manager | Holds internal scope-signing and CloudFront-to-API verification secrets. Browser clients never receive these secrets. |
 | IAM | Restricts the service roles and permitted resource access throughout the workflow. |
 
-Comprehend performs text detection, GuardDuty scans uploaded files for malware, and Bedrock Guardrails enforce AI content policies. These are separate checks. Preserving a detected name does not prevent the Comprehend request or its text-processing charge.
+GuardDuty scans uploaded files for malware, and Bedrock Guardrails enforce AI content policies. PII detection and redaction are not performed: Comprehend calls, permissions, and enablement settings have been removed. The shared content checks return the original context unchanged when the content policy passes.
 
-The short, two-way Comprehend connector above the worker is a synchronous side call, not another workflow branch. The worker sends text, receives detected entities and their locations, then applies PilarPrep's preservation, redaction, or blocking rules before continuing. Comprehend does not forward the job to Bedrock or start another Lambda invocation. AgentCore uses the same call-and-return pattern within its runtime. The connector does not represent a new queue job or a retry loop.
+Transcribe still produces the meeting text, and Bedrock through Strands compares it with the approved packet and retrieved evidence. Human-approved corrections still update project state and the handoff. Knowledge Base evidence ingestion is a separate operation; removing Comprehend changes neither retrieval nor packet correction behavior.
 
-The supporting services above were checked against source/IaC and read-only deployed-resource queries on August 30, 2026. The live worker has content safety and PII screening enabled. WAF is attached to CloudFront through the existing external Web ACL rather than a new managed ACL created by this repository. No infrastructure was changed for this diagram update.
+The diagram reflects the repository's configuration. Verify deployed settings after applying the templates; updating documentation alone does not change AWS resources. WAF is attached to CloudFront through the existing external Web ACL rather than a new managed ACL created by this repository.
 
 ## Scope of This Repository
 

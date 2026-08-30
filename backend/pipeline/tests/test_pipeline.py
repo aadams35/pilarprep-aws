@@ -3888,333 +3888,129 @@ class ContentSafetyTests(unittest.TestCase):
     def tearDown(self):
         content_safety.clear_client_cache()
 
-    def test_customer_names_are_preserved_while_contact_pii_is_redacted(self):
-        text = "Contact Alice at alice@example.com."
-        entities = [
-            {
-                "Type": "NAME",
-                "BeginOffset": text.index("Alice"),
-                "EndOffset": text.index("Alice") + len("Alice"),
-                "Score": 0.99,
-            },
-            {
-                "Type": "EMAIL",
-                "BeginOffset": text.index("alice@example.com"),
-                "EndOffset": text.index("alice@example.com") + len("alice@example.com"),
-                "Score": 0.99,
-            },
-        ]
+    def _screen_with_guardrail(self, value, *, action="brief.generate", source="INPUT", response="NONE"):
         calls = []
-
-        class Comprehend:
-            def detect_pii_entities(self, **_kwargs):
-                return {"Entities": entities}
 
         class Guardrail:
             def apply_guardrail(self, **kwargs):
                 calls.append(kwargs)
-                return {"action": "NONE"}
+                return {"action": response}
 
-        clients = {"comprehend": Comprehend(), "bedrock-runtime": Guardrail()}
         with (
             patch.dict(
                 content_safety.os.environ,
                 {
+                    "CONTENT_SAFETY_ENABLED": "true",
+                    # A stale deployment variable must not restore PII detection.
                     "PII_SCREENING_ENABLED": "true",
                     "BEDROCK_GUARDRAIL_ID": "guardrail-1",
                     "BEDROCK_GUARDRAIL_VERSION": "1",
                 },
                 clear=False,
             ),
-            patch.object(
-                content_safety,
-                "aws_client",
-                side_effect=lambda name: clients[name],
-            ),
+            patch.object(content_safety, "aws_client", return_value=Guardrail()) as client,
         ):
             screened, diagnostics = content_safety.screen_payload(
-                {"notes": text},
-                source="INPUT",
-                action="brief.generate",
-                trace_id="trace-safe-input",
+                value, source=source, action=action, trace_id="trace-context-preserved"
             )
 
-        self.assertIn("Alice", screened["notes"])
-        self.assertNotIn("alice@example.com", screened["notes"])
-        self.assertNotIn("[PII:NAME:001]", screened["notes"])
-        self.assertIn("[PII:EMAIL:001]", screened["notes"])
-        self.assertEqual(diagnostics["piiTypes"], ["EMAIL"])
-        self.assertEqual(diagnostics["redactionCount"], 1)
-        self.assertEqual(calls[0]["source"], "INPUT")
-        self.assertIn("Alice", calls[0]["content"][0]["text"]["text"])
-        self.assertNotIn(
-            "alice@example.com", calls[0]["content"][0]["text"]["text"]
+        self.assertTrue(client.call_args_list)
+        self.assertTrue(all(call.args == ("bedrock-runtime",) for call in client.call_args_list))
+        return screened, diagnostics, calls
+
+    def test_all_workflows_preserve_context_without_comprehend(self):
+        payload = {
+            "clientId": "blue-mesa-payments",
+            "notes": "Dev Malik owns payroll integration; contact dev@example.com.",
+            "sections": [{"owner": "Alice", "reference": "Synthetic account 123456789"}],
+            "scope": {"tenantId": "demo", "userId": "test-user"},
+        }
+        actions = (
+            "brief.generate", "brief.refine", "handoff.generate", "catchup.generate",
+            "generate_handoff", "generate_catchup", "meeting.process",
+            "meeting.approve", "analyze_meeting",
         )
+        for action in actions:
+            for source in ("INPUT", "OUTPUT"):
+                with self.subTest(action=action, source=source):
+                    screened, diagnostics, calls = self._screen_with_guardrail(
+                        payload, action=action, source=source
+                    )
+                    self.assertIs(screened, payload)
+                    self.assertEqual(diagnostics["redactionCount"], 0)
+                    self.assertEqual(diagnostics["piiTypes"], [])
+                    self.assertEqual(diagnostics["comprehendChunks"], 0)
+                    self.assertEqual(diagnostics["policyResult"], "passed")
+                    self.assertEqual(calls[0]["source"], source)
+                    self.assertIn(payload["notes"], calls[0]["content"][0]["text"]["text"])
 
     def test_private_meeting_preserves_context_and_still_applies_guardrail(self):
-        text = "Dev Malik can be reached at dev@example.com."
-        guardrail_calls = []
-
-        class Comprehend:
-            def detect_pii_entities(self, **_kwargs):
-                raise AssertionError("Meeting context must not use PII redaction")
-
-        class Guardrail:
-            def apply_guardrail(self, **kwargs):
-                guardrail_calls.append(kwargs)
-                return {"action": "NONE"}
-
-        clients = {
-            "comprehend": Comprehend(),
-            "bedrock-runtime": Guardrail(),
-        }
-        with (
-            patch.dict(
-                content_safety.os.environ,
-                {
-                    "PII_SCREENING_ENABLED": "true",
-                    "BEDROCK_GUARDRAIL_ID": "guardrail-1",
-                    "BEDROCK_GUARDRAIL_VERSION": "1",
-                },
-                clear=False,
-            ),
-            patch.object(
-                content_safety,
-                "aws_client",
-                side_effect=lambda name: clients[name],
-            ),
-        ):
-            screened, diagnostics = content_safety.screen_payload(
-                {"notes": text},
-                source="INPUT",
-                action="meeting.process",
-                trace_id="trace-meeting-names",
-            )
-
-        self.assertIn("Dev Malik", screened["notes"])
-        self.assertIn("dev@example.com", screened["notes"])
-        self.assertEqual(diagnostics["redactionCount"], 0)
-        self.assertEqual(diagnostics["piiMode"], "preserved-private-context")
-        self.assertEqual(diagnostics["comprehendChunks"], 0)
-        self.assertIn(
-            text,
-            guardrail_calls[0]["content"][0]["text"]["text"],
+        payload = {"notes": "Dev Malik can be reached at dev@example.com."}
+        screened, diagnostics, calls = self._screen_with_guardrail(
+            payload, action="meeting.process"
         )
+        self.assertIs(screened, payload)
+        self.assertEqual(diagnostics["piiMode"], "preserved-private-context")
+        self.assertEqual(diagnostics["redactionCount"], 0)
+        self.assertEqual(diagnostics["comprehendChunks"], 0)
+        self.assertIn(payload["notes"], calls[0]["content"][0]["text"]["text"])
 
-    def test_structured_payload_is_screened_in_bounded_batches(self):
+    def test_structured_payload_guardrails_remain_bounded_and_complete(self):
         sections = [
-            {
-                "summary": (
-                    f"Section {index} owner Alice can be reached at "
-                    "alice@example.com for approved follow-up."
-                )
-            }
-            for index in range(30)
+            {"summary": f"Section {index} owner Alice can be reached at alice@example.com for approved follow-up."}
+            for index in range(160)
         ]
-        comprehend_calls = []
-        guardrail_calls = []
+        payload = {"clientId": "blue-mesa-payments", "sections": sections}
+        screened, diagnostics, calls = self._screen_with_guardrail(payload)
+        documents = [call["content"][0]["text"]["text"] for call in calls]
+        self.assertIs(screened, payload)
+        self.assertGreater(len(documents), 1)
+        self.assertEqual(diagnostics["guardrailChunks"], len(documents))
+        self.assertTrue(all(len(document) <= content_safety.MAX_GUARDRAIL_CHARS for document in documents))
+        for section in sections:
+            self.assertIn(section["summary"], "\n".join(documents))
+        self.assertEqual(diagnostics["redactionCount"], 0)
+        self.assertEqual(diagnostics["piiMode"], "disabled")
 
-        class Comprehend:
-            def detect_pii_entities(self, **kwargs):
-                document = kwargs["Text"]
-                comprehend_calls.append(document)
-                entities = []
-                for pii_type, value in (
-                    ("NAME", "Alice"),
-                    ("EMAIL", "alice@example.com"),
-                ):
-                    cursor = 0
-                    while True:
-                        begin = document.find(value, cursor)
-                        if begin < 0:
-                            break
-                        entities.append(
-                            {
-                                "Type": pii_type,
-                                "BeginOffset": begin,
-                                "EndOffset": begin + len(value),
-                                "Score": 0.99,
-                            }
-                        )
-                        cursor = begin + len(value)
-                return {"Entities": entities}
+    def test_guardrail_intervention_remains_fail_closed(self):
+        for source in ("INPUT", "OUTPUT"):
+            with self.subTest(source=source), self.assertRaises(content_safety.GuardrailIntervention):
+                self._screen_with_guardrail(
+                    {"notes": "unsafe content"}, source=source, response="GUARDRAIL_INTERVENED"
+                )
 
-        class Guardrail:
-            def apply_guardrail(self, **kwargs):
-                guardrail_calls.append(kwargs)
-                return {"action": "NONE"}
+    def test_unknown_guardrail_response_is_rejected(self):
+        with self.assertRaises(content_safety.ContentSafetyError):
+            self._screen_with_guardrail({"notes": "customer context"}, response="UNKNOWN")
 
-        clients = {"comprehend": Comprehend(), "bedrock-runtime": Guardrail()}
+    def test_enabled_content_checks_require_guardrail_configuration(self):
         with (
-            patch.dict(
-                content_safety.os.environ,
-                {
-                    "PII_SCREENING_ENABLED": "true",
-                    "BEDROCK_GUARDRAIL_ID": "guardrail-1",
-                    "BEDROCK_GUARDRAIL_VERSION": "1",
-                },
-                clear=False,
-            ),
-            patch.object(
-                content_safety,
-                "aws_client",
-                side_effect=lambda name: clients[name],
-            ),
+            patch.dict(content_safety.os.environ, {
+                "CONTENT_SAFETY_ENABLED": "true",
+                "BEDROCK_GUARDRAIL_ID": "",
+                "BEDROCK_GUARDRAIL_VERSION": "",
+            }),
+            patch.object(content_safety, "aws_client") as client,
+            self.assertRaises(content_safety.ContentSafetyConfigurationError),
+        ):
+            content_safety.screen_payload({"notes": "customer context"}, source="INPUT", action="brief.generate")
+        client.assert_not_called()
+
+    def test_disabled_checks_do_not_call_any_service(self):
+        payload = {"notes": "Contact Alice at alice@example.com."}
+        with (
+            patch.dict(content_safety.os.environ, {
+                "CONTENT_SAFETY_ENABLED": "false", "PII_SCREENING_ENABLED": "true"
+            }),
+            patch.object(content_safety, "aws_client") as client,
         ):
             screened, diagnostics = content_safety.screen_payload(
-                {
-                    "clientId": "blue-mesa-payments",
-                    "sections": sections,
-                },
-                source="INPUT",
-                action="brief.generate",
+                payload, source="INPUT", action="brief.generate"
             )
-
-        self.assertEqual(screened["clientId"], "blue-mesa-payments")
-        self.assertEqual(len(comprehend_calls), 1)
-        self.assertEqual(len(guardrail_calls), 1)
-        self.assertEqual(diagnostics["comprehendChunks"], 1)
-        self.assertEqual(diagnostics["guardrailChunks"], 1)
-        self.assertEqual(diagnostics["redactionCount"], 30)
-        for section in screened["sections"]:
-            self.assertIn("Alice", section["summary"])
-            self.assertNotIn("alice@example.com", section["summary"])
-            self.assertNotIn("[PII:NAME:001]", section["summary"])
-            self.assertIn("[PII:EMAIL:001]", section["summary"])
-
-    def test_high_risk_pii_is_blocked_before_guardrail(self):
-        text = "SSN 123-45-6789"
-
-        class Comprehend:
-            def detect_pii_entities(self, **_kwargs):
-                return {
-                    "Entities": [
-                        {
-                            "Type": "SSN",
-                            "BeginOffset": 4,
-                            "EndOffset": len(text),
-                            "Score": 0.99,
-                        }
-                    ]
-                }
-
-        class Guardrail:
-            def apply_guardrail(self, **_kwargs):
-                raise AssertionError("Guardrail must not receive high-risk PII")
-
-        clients = {"comprehend": Comprehend(), "bedrock-runtime": Guardrail()}
-        with (
-            patch.dict(
-                content_safety.os.environ,
-                {
-                    "PII_SCREENING_ENABLED": "true",
-                    "BEDROCK_GUARDRAIL_ID": "guardrail-1",
-                    "BEDROCK_GUARDRAIL_VERSION": "1",
-                },
-                clear=False,
-            ),
-            patch.object(
-                content_safety,
-                "aws_client",
-                side_effect=lambda name: clients[name],
-            ),
-            self.assertRaises(content_safety.HighRiskPiiViolation),
-        ):
-            content_safety.screen_payload(
-                {"notes": text},
-                source="INPUT",
-                action="brief.generate",
-            )
-
-    def test_high_risk_model_output_is_redacted_before_guardrail(self):
-        text = "Generated account reference 123456789."
-        calls = []
-
-        class Comprehend:
-            def detect_pii_entities(self, **_kwargs):
-                return {
-                    "Entities": [
-                        {
-                            "Type": "BANK_ACCOUNT_NUMBER",
-                            "BeginOffset": text.index("123456789"),
-                            "EndOffset": text.index("123456789") + len("123456789"),
-                            "Score": 0.99,
-                        }
-                    ]
-                }
-
-        class Guardrail:
-            def apply_guardrail(self, **kwargs):
-                calls.append(kwargs)
-                return {"action": "NONE"}
-
-        clients = {"comprehend": Comprehend(), "bedrock-runtime": Guardrail()}
-        with (
-            patch.dict(
-                content_safety.os.environ,
-                {
-                    "PII_SCREENING_ENABLED": "true",
-                    "BEDROCK_GUARDRAIL_ID": "guardrail-1",
-                    "BEDROCK_GUARDRAIL_VERSION": "1",
-                },
-                clear=False,
-            ),
-            patch.object(
-                content_safety,
-                "aws_client",
-                side_effect=lambda name: clients[name],
-            ),
-        ):
-            screened, diagnostics = content_safety.screen_payload(
-                {"brief": text},
-                source="OUTPUT",
-                action="brief.refine",
-            )
-
-        self.assertNotIn("123456789", screened["brief"])
-        self.assertIn("[PII:BANK_ACCOUNT_NUMBER:001]", screened["brief"])
-        self.assertEqual(diagnostics["piiTypes"], ["BANK_ACCOUNT_NUMBER"])
-        self.assertEqual(diagnostics["redactionCount"], 1)
-        self.assertNotIn("123456789", calls[0]["content"][0]["text"]["text"])
-
-
-    def test_output_guardrail_intervention_is_fail_closed(self):
-        class Comprehend:
-            def detect_pii_entities(self, **_kwargs):
-                return {"Entities": []}
-
-        class Guardrail:
-            source = ""
-
-            def apply_guardrail(self, **kwargs):
-                self.source = kwargs["source"]
-                return {"action": "GUARDRAIL_INTERVENED"}
-
-        guardrail = Guardrail()
-        clients = {"comprehend": Comprehend(), "bedrock-runtime": guardrail}
-        with (
-            patch.dict(
-                content_safety.os.environ,
-                {
-                    "PII_SCREENING_ENABLED": "true",
-                    "BEDROCK_GUARDRAIL_ID": "guardrail-1",
-                    "BEDROCK_GUARDRAIL_VERSION": "1",
-                },
-                clear=False,
-            ),
-            patch.object(
-                content_safety,
-                "aws_client",
-                side_effect=lambda name: clients[name],
-            ),
-            self.assertRaises(content_safety.GuardrailIntervention),
-        ):
-            content_safety.screen_payload(
-                {"brief": "unsafe generated output"},
-                source="OUTPUT",
-                action="brief.generate",
-            )
-        self.assertEqual(guardrail.source, "OUTPUT")
+        self.assertIs(screened, payload)
+        self.assertEqual(diagnostics["piiMode"], "disabled")
+        self.assertEqual(diagnostics["policyResult"], "disabled")
+        client.assert_not_called()
 
 
 class AudioSecurityTests(unittest.TestCase):
@@ -4715,8 +4511,8 @@ class SecurityBoundaryTests(unittest.TestCase):
             "s3:ExistingObjectTag/GuardDutyMalwareScanStatus: NO_THREATS_FOUND",
             pipeline,
         )
-        self.assertIn("comprehend:DetectPiiEntities", pipeline)
-        self.assertIn("comprehend:DetectPiiEntities", agentcore)
+        self.assertNotIn("comprehend:", pipeline)
+        self.assertNotIn("comprehend:", agentcore)
         self.assertIn(
             "  AgentLambdaSdkLayer:\n"
             "    Type: AWS::Lambda::LayerVersion\n"
@@ -4724,8 +4520,8 @@ class SecurityBoundaryTests(unittest.TestCase):
             "    UpdateReplacePolicy: Retain",
             agentcore,
         )
-        self.assertIn("PII_SCREENING_ENABLED: \"true\"", pipeline)
-        self.assertIn("PII_SCREENING_ENABLED: \"true\"", agentcore)
+        self.assertNotIn("PII_SCREENING_ENABLED:", pipeline)
+        self.assertNotIn("PII_SCREENING_ENABLED:", agentcore)
         self.assertIn("CONTENT_SAFETY_ENABLED: \"true\"", pipeline)
         self.assertIn("CONTENT_SAFETY_ENABLED: \"true\"", agentcore)
         self.assertIn(r"backend\shared\content_safety.py", deploy_agent)

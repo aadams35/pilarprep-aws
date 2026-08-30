@@ -16,7 +16,7 @@ The public site is a demonstration with synthetic customer information. Do not e
 
 ## Important Limits
 
-GuardDuty is a malware scanner, not a semantic content moderator. Bedrock Guardrails do not guarantee factual correctness. Source-coverage indicators are heuristic and can be wrong. The meeting policy preserves full-text context and names; other safety paths remain configurable and must be reviewed for the intended users and data.
+GuardDuty is a malware scanner, not a semantic content moderator. Bedrock Guardrails do not guarantee factual correctness. Source-coverage indicators are heuristic and can be wrong. PII detection and redaction are intentionally disabled across workflows: Comprehend is not called, and names, contact details, and other supplied context can remain in model requests and saved packets. Access controls and human review still apply. Only submit information you are authorized to process; the public demonstration remains synthetic-data-only.
 
 This repository does not establish regulatory compliance, a penetration-test result, or a production SLA. Tenant lifecycle administration, evidence approval separation, data-subject requests, deletion testing, and broader adversarial evaluation remain production work. Retained compatibility endpoints should be reviewed before exposing a new deployment.
 

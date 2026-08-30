@@ -1168,10 +1168,6 @@ Resources:
                   - transcribe:GetTranscriptionJob
                   - transcribe:TagResource
                 Resource: "*"
-              - Sid: DetectPiiBeforeAiProcessing
-                Effect: Allow
-                Action: comprehend:DetectPiiEntities
-                Resource: "*"
               - Sid: InvokeConfiguredModels
                 Effect: Allow
                 Action:
@@ -1432,7 +1428,6 @@ Resources:
           MAX_RECEIVE_COUNT: "3"
           RETRY_VISIBILITY_SECONDS: "5"
           CONTENT_SAFETY_ENABLED: "true"
-          PII_SCREENING_ENABLED: "true"
           EXPECTED_AWS_ACCOUNT_ID: !Ref AWS::AccountId
           BRIEF_PROMPT_VERSION: "2026-08-21.1"
           AGENT_PROMPT_VERSION: "2026-08-21.1"
@@ -1897,19 +1892,8 @@ Resources:
     Properties:
       AlarmActions: [!Ref OperationsAlertTopic]
       AlarmName: !Sub "${ResourcePrefix}-ai-content-safety-interventions"
-      AlarmDescription: PII or Bedrock Guardrail controls blocked an AI request or response.
+      AlarmDescription: Bedrock Guardrails blocked an AI request or response.
       Metrics:
-        - Id: pii
-          ReturnData: false
-          MetricStat:
-            Metric:
-              Namespace: PilarPrep
-              MetricName: PiiBlockedRequests
-              Dimensions:
-                - Name: Service
-                  Value: JobsPipeline
-            Period: 300
-            Stat: Sum
         - Id: inputguard
           ReturnData: false
           MetricStat:
@@ -1933,7 +1917,7 @@ Resources:
             Period: 300
             Stat: Sum
         - Id: total
-          Expression: pii + inputguard + outputguard
+          Expression: inputguard + outputguard
           Label: AI content-safety interventions
           ReturnData: true
       EvaluationPeriods: 1

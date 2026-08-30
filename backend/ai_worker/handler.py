@@ -118,11 +118,6 @@ def _screen_ai_payload(
             action=action,
             trace_id=trace_id,
         )
-    except content_safety.HighRiskPiiViolation as exc:
-        metric("PiiBlockedRequests", Action=action, Source=source)
-        raise NonRetryableJobError(
-            "Remove high-risk sensitive information before using AI processing."
-        ) from exc
     except content_safety.GuardrailIntervention as exc:
         metric(f"{source.title()}GuardrailInterventions", Action=action)
         raise NonRetryableJobError(
@@ -135,9 +130,6 @@ def _screen_ai_payload(
         raise NonRetryableJobError(
             "AI content-safety controls are unavailable."
         ) from exc
-    redactions = int(diagnostics.get("redactionCount") or 0)
-    if redactions:
-        metric("PiiRedactions", redactions, Action=action, Source=source)
     return sanitized, diagnostics
 
 
@@ -1908,7 +1900,7 @@ def _store_result(
     input_safety = input_safety if isinstance(input_safety, Mapping) else {}
     output_safety = safety.get("output")
     output_safety = output_safety if isinstance(output_safety, Mapping) else {}
-    pii_screening_outcome = str(
+    input_validation_outcome = str(
         input_safety.get("policyResult") or "not_recorded"
     )[:64]
     output_validation_outcome = str(
@@ -1950,9 +1942,9 @@ def _store_result(
         UpdateExpression=(
             "SET #status = :final, resultKey = :resultKey, "
             "updatedAt = :updatedAt, completedAt = :updatedAt, "
-            "piiScreeningOutcome = :piiScreeningOutcome, "
+            "inputValidationOutcome = :inputValidationOutcome, "
             "outputValidationOutcome = :outputValidationOutcome "
-            "REMOVE leaseExpiresAt, #error"
+            "REMOVE leaseExpiresAt, #error, piiScreeningOutcome"
         ),
         ConditionExpression=(
             "#status IN (:running, :validating, :saving, :analyzing)"
@@ -1966,7 +1958,7 @@ def _store_result(
             ":analyzing": {"S": "analyzing"},
             ":resultKey": {"S": result_key},
             ":updatedAt": {"S": timestamp},
-            ":piiScreeningOutcome": {"S": pii_screening_outcome},
+            ":inputValidationOutcome": {"S": input_validation_outcome},
             ":outputValidationOutcome": {"S": output_validation_outcome},
         },
     )

@@ -752,10 +752,6 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Sid: DetectPiiBeforeAgentProcessing
-                Effect: Allow
-                Action: comprehend:DetectPiiEntities
-                Resource: "*"
               - Sid: InvokeConfiguredModels
                 Effect: Allow
                 Action:
@@ -851,7 +847,6 @@ Resources:
         BEDROCK_GUARDRAIL_ID: !If [HasBedrockGuardrail, !Ref BedrockGuardrailId, !Ref "AWS::NoValue"]
         BEDROCK_GUARDRAIL_VERSION: !If [HasBedrockGuardrail, !Ref BedrockGuardrailVersion, !Ref "AWS::NoValue"]
         CONTENT_SAFETY_ENABLED: "true"
-        PII_SCREENING_ENABLED: "true"
         KNOWLEDGE_BASE_ID: !If
           - HasKnowledgeBase
           - !Ref KnowledgeBaseId
