@@ -1,0 +1,10 @@
+{
+  "metadataAttributes": {
+    "scenarioId": "blue-mesa-payments",
+    "documentType": "compliance",
+    "version": 1,
+    "approved": true,
+    "visibility": "public-demo",
+    "sourceTitle": "Blue Mesa compliance and retention"
+  }
+}

@@ -1,0 +1,3 @@
+boto3==1.43.54
+pydantic==2.13.4
+PyYAML==6.0.2

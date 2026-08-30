@@ -1,0 +1,3 @@
+{
+  "body": "{\"mode\":\"prebrief\",\"company\":\"Apex Mutual\",\"industry\":\"Financial Services\",\"meetingType\":\"Executive Briefing\",\"companySize\":\"Enterprise\",\"pillars\":[\"Security\",\"Reliability\",\"Cost Optimization\"],\"pillarRanking\":[{\"rank\":1,\"pillar\":\"Security\"},{\"rank\":2,\"pillar\":\"Reliability\"},{\"rank\":3,\"pillar\":\"Cost Optimization\"}],\"context\":\"Modernizing a customer portal with audit and migration risk.\",\"feedback\":[\"Reduce AWS jargon\"],\"meetingNotes\":\"\"}"
+}

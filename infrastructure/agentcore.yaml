@@ -1,0 +1,1068 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: PilarPrep governed project handoff agent on Amazon Bedrock AgentCore.
+
+Parameters:
+  ResourcePrefix:
+    Type: String
+    Default: pillarprep-demo
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{2,40}$"
+  AgentRuntimeName:
+    Type: String
+    Default: PilarPrepProjectAgent
+    AllowedPattern: "^[a-zA-Z][a-zA-Z0-9_]{0,47}$"
+  ProjectName:
+    Type: String
+    Default: PilarPrep
+  EnvironmentName:
+    Type: String
+    Default: demo
+  Owner:
+    Type: String
+    Default: austin-adams
+  CostCenter:
+    Type: String
+    Default: hackathon
+  AllowedOrigin:
+    Type: String
+    Description: HTTPS origin of your deployment, without a trailing slash.
+  SecondaryAllowedOrigin:
+    Type: String
+    Default: ""
+    Description: Optional second browser origin for the AWS CloudFront deployment.
+  ArtifactBucketName:
+    Type: String
+    Description: Private artifact bucket output from the existing PilarPrep backend stack.
+  ProjectStateTableName:
+    Type: String
+    Description: DynamoDB table output from the existing PilarPrep backend stack.
+  DemoInvokeRoleName:
+    Type: String
+    Description: Cognito demo IAM role output from the existing backend stack.
+  FallbackFunctionArn:
+    Type: String
+    Description: Existing brief Lambda ARN used when AgentCore is unavailable.
+  RuntimeCodeBucket:
+    Type: String
+    Description: Private deployment bucket containing the ARM64 AgentCore runtime zip.
+  RuntimeCodeKey:
+    Type: String
+    Description: S3 key for the AgentCore direct-code deployment zip.
+  LambdaDependencyBucket:
+    Type: String
+    Description: Private deployment bucket containing the pinned Lambda SDK layer.
+  LambdaDependencyKey:
+    Type: String
+    Description: S3 key for the ARM64 Python 3.12 Lambda SDK layer zip.
+  BedrockModelId:
+    Type: String
+    Default: us.amazon.nova-pro-v1:0
+  BedrockAlternateModelId:
+    Type: String
+    Default: us.amazon.nova-micro-v1:0
+  BedrockPremiumModelId:
+    Type: String
+    Default: global.anthropic.claude-sonnet-4-6
+  BedrockFoundationModelId:
+    Type: String
+    Default: amazon.nova-pro-v1:0
+  BedrockAlternateFoundationModelId:
+    Type: String
+    Default: amazon.nova-micro-v1:0
+  BedrockPremiumFoundationModelId:
+    Type: String
+    Default: anthropic.claude-sonnet-4-6
+  BedrockGuardrailId:
+    Type: String
+    Default: ""
+  BedrockGuardrailVersion:
+    Type: String
+    Default: ""
+  DemoTenantId:
+    Type: String
+    Default: demo
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$"
+  DemoLegacyClientId:
+    Type: String
+    Default: bluemesa-payments
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$"
+    Description: Single demo client allowed to use the temporary legacy Loop 1 S3 key.
+  DemoAllowedClientIds:
+    Type: String
+    Default: apex-mutual,bluemesa-payments,northstar-health,peakcart-retail,custom-demo
+    Description: Comma-separated client IDs available to the public demo IAM identity.
+  AllowLegacyDemoBrief:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Allows the demo tenant to read the current legacy latest-brief key during migration.
+  PermissionsBoundaryArn:
+    Type: String
+    Default: ""
+  UnifiedWorkerRoleArn:
+    Type: String
+    Default: ""
+    Description: Optional unified SQS worker role authorized to invoke this runtime.
+  KnowledgeBaseId:
+    Type: String
+    Default: ""
+  KnowledgeBaseArn:
+    Type: String
+    Default: ""
+
+  DataKmsKeyArn:
+    Type: String
+    Default: ""
+    Description: Optional shared customer-managed KMS key for AgentCore artifacts and secrets.
+Conditions:
+  HasSecondaryAllowedOrigin: !Not [!Equals [!Ref SecondaryAllowedOrigin, ""]]
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, ""]]
+  HasUnifiedWorkerRole: !Not [!Equals [!Ref UnifiedWorkerRoleArn, ""]]
+  HasBedrockGuardrail: !And
+    - !Not [!Equals [!Ref BedrockGuardrailId, ""]]
+    - !Not [!Equals [!Ref BedrockGuardrailVersion, ""]]
+  HasKnowledgeBase: !Not [!Equals [!Ref KnowledgeBaseArn, ""]]
+  AllowsLegacyDemoBrief: !Equals [!Ref AllowLegacyDemoBrief, "true"]
+  HasDataKmsKey: !Not [!Equals [!Ref DataKmsKeyArn, ""]]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    Tracing: Active
+    PropagateTags: true
+    Tags:
+      Project: !Ref ProjectName
+      Application: sa-briefing-generator
+      Environment: !Ref EnvironmentName
+      Owner: !Ref Owner
+      CostCenter: !Ref CostCenter
+      ManagedBy: cloudformation
+      Repository: aadams35/pilarprep-aws
+      DataClassification: demo
+
+Resources:
+  AgentLambdaSdkLayer:
+    Type: AWS::Lambda::LayerVersion
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LayerName: !Sub "${ResourcePrefix}-agent-sdk"
+      Description: Pinned AWS SDK dependencies for AgentCore Router and Gateway tools.
+      Content:
+        S3Bucket: !Ref LambdaDependencyBucket
+        S3Key: !Ref LambdaDependencyKey
+      CompatibleArchitectures: [arm64]
+      CompatibleRuntimes: [python3.12]
+
+  AgentApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Name: !Sub "${ResourcePrefix}-agent-api"
+      Description: !Sub "${ProjectName} ${EnvironmentName} AgentCore handoff API"
+      PropagateTags: true
+      Auth:
+        EnableIamAuthorizer: true
+        DefaultAuthorizer: AWS_IAM
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref AllowedOrigin
+          - !If [HasSecondaryAllowedOrigin, !Ref SecondaryAllowedOrigin, !Ref "AWS::NoValue"]
+        AllowHeaders:
+          - accept
+          - authorization
+          - content-type
+          - x-amz-content-sha256
+          - x-amz-date
+          - x-amz-security-token
+        AllowMethods: [POST, OPTIONS]
+      Tags:
+        Name: !Sub "${ResourcePrefix}-agent-api"
+        Project: !Ref ProjectName
+        Application: sa-briefing-generator
+        Environment: !Ref EnvironmentName
+        Owner: !Ref Owner
+        CostCenter: !Ref CostCenter
+        ManagedBy: cloudformation
+        Repository: aadams35/pilarprep-aws
+        DataClassification: demo
+
+  ScopeSigningSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${ResourcePrefix}/agentcore/scope-signing"
+      Description: Internal HMAC key binding AgentCore tools to authenticated project scope.
+      KmsKeyId: !If [HasDataKmsKey, !Ref DataKmsKeyArn, !Ref "AWS::NoValue"]
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-agentcore-scope-signing"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: DataClassification
+          Value: confidential
+
+  AgentRouterLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ResourcePrefix}-agent-router"
+      RetentionInDays: 14
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-agent-router-logs"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  AgentWorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ResourcePrefix}-agent-worker"
+      RetentionInDays: 14
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-agent-worker-logs"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  AgentRouterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-agent-router-role"
+      Description: Queues and reads authenticated PilarPrep AgentCore jobs without model or artifact access.
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundaryArn, !Ref "AWS::NoValue"]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${ResourcePrefix}-agent-router-jobs"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadAndWriteAgentJobs
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource: !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ProjectStateTableName}"
+                Condition:
+                  ForAllValues:StringLike:
+                    dynamodb:LeadingKeys:
+                      - "TENANT#*|CLIENT#*|PROJECT#*"
+              - !If
+                - HasDataKmsKey
+                - Sid: UseConfiguredDataKey
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:Encrypt
+                    - kms:GenerateDataKey
+                    - kms:DescribeKey
+                  Resource: !Ref DataKmsKeyArn
+                - !Ref "AWS::NoValue"
+              - Sid: InvokeOnlyAgentWorker
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ResourcePrefix}-agent-worker"
+              - Sid: WriteRouterLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${AgentRouterLogGroup.Arn}:*"
+              - Sid: PublishRouterTraces
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                  - xray:GetSamplingStatisticSummaries
+                Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-agent-router-role"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: ManagedBy
+          Value: cloudformation
+
+  AgentWorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-agent-worker-role"
+      Description: Runs long-lived PilarPrep AgentCore jobs with scoped runtime, fallback, and job-state access.
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundaryArn, !Ref "AWS::NoValue"]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${ResourcePrefix}-agent-worker-runtime"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InvokeProjectRuntime
+                Effect: Allow
+                Action: bedrock-agentcore:InvokeAgentRuntime
+                Resource:
+                  - !GetAtt ProjectAgentRuntime.AgentRuntimeArn
+                  - !Sub "${ProjectAgentRuntime.AgentRuntimeArn}/runtime-endpoint/*"
+              - Sid: InvokeExistingFallback
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Ref FallbackFunctionArn
+              - Sid: ReadScopeSigningSecret
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref ScopeSigningSecret
+              - !If
+                - HasDataKmsKey
+                - Sid: UseConfiguredDataKey
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:Encrypt
+                    - kms:GenerateDataKey
+                    - kms:DescribeKey
+                  Resource: !Ref DataKmsKeyArn
+                - !Ref "AWS::NoValue"
+              - Sid: UpdateAgentJobs
+                Effect: Allow
+                Action: dynamodb:UpdateItem
+                Resource: !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ProjectStateTableName}"
+                Condition:
+                  ForAllValues:StringLike:
+                    dynamodb:LeadingKeys:
+                      - "TENANT#*|CLIENT#*|PROJECT#*"
+              - Sid: WriteWorkerLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${AgentWorkerLogGroup.Arn}:*"
+              - Sid: PublishWorkerTraces
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                  - xray:GetSamplingStatisticSummaries
+                Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-agent-worker-role"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: ManagedBy
+          Value: cloudformation
+  AgentRouterFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: AgentRouterLogGroup
+    Properties:
+      FunctionName: !Sub "${ResourcePrefix}-agent-router"
+      Description: Authorizes, queues, and polls scoped PilarPrep AgentCore jobs.
+      CodeUri: ../backend/agentcore
+      Handler: compatibility.handler.handler
+      Role: !GetAtt AgentRouterRole.Arn
+      Layers: [!Ref AgentLambdaSdkLayer]
+      Timeout: 30
+      MemorySize: 512
+      Environment:
+        Variables:
+          ALLOWED_ORIGIN: !Ref AllowedOrigin
+          PROJECT_TABLE: !Ref ProjectStateTableName
+          AGENT_WORKER_FUNCTION: !Sub "${ResourcePrefix}-agent-worker"
+          DEMO_TENANT_ID: !Ref DemoTenantId
+          DEMO_ALLOWED_CLIENT_IDS: !Ref DemoAllowedClientIds
+          ALLOW_LOCAL_IDENTITY: "false"
+      Tags:
+        Name: !Sub "${ResourcePrefix}-agent-router"
+      Events:
+        InvokeAgent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AgentApi
+            Path: /agent
+            Method: POST
+
+  AgentWorkerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: AgentWorkerLogGroup
+    Properties:
+      FunctionName: !Sub "${ResourcePrefix}-agent-worker"
+      Description: Runs AgentCore handoff and catch-up jobs outside the API Gateway timeout window.
+      CodeUri: ../backend/agentcore
+      Handler: compatibility.handler.worker_handler
+      Role: !GetAtt AgentWorkerRole.Arn
+      Layers: [!Ref AgentLambdaSdkLayer]
+      Timeout: 600
+      MemorySize: 512
+      Environment:
+        Variables:
+          AGENT_RUNTIME_ARN: !GetAtt ProjectAgentRuntime.AgentRuntimeArn
+          FALLBACK_FUNCTION_ARN: !Ref FallbackFunctionArn
+          SCOPE_SECRET_ARN: !Ref ScopeSigningSecret
+          PROJECT_TABLE: !Ref ProjectStateTableName
+          AGENT_RUNTIME_READ_TIMEOUT_SECONDS: "540"
+          DEMO_TENANT_ID: !Ref DemoTenantId
+          DEMO_ALLOWED_CLIENT_IDS: !Ref DemoAllowedClientIds
+          ALLOW_LOCAL_IDENTITY: "false"
+      Tags:
+        Name: !Sub "${ResourcePrefix}-agent-worker"
+  AgentToolsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ResourcePrefix}-agent-tools"
+      RetentionInDays: 14
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-agent-tools-logs"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  AgentToolsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-agent-tools-role"
+      Description: Project-scoped S3 and DynamoDB access for validated AgentCore tools.
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundaryArn, !Ref "AWS::NoValue"]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${ResourcePrefix}-agent-tools-data"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ListOnlyScopedHandoffVersions
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucketName}"
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - tenants/*/clients/*/projects/*/handoff/*
+              - !If
+                - AllowsLegacyDemoBrief
+                - Sid: ListOnlyExplicitDemoBriefKeys
+                  Effect: Allow
+                  Action: s3:ListBucket
+                  Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucketName}"
+                  Condition:
+                    StringEquals:
+                      s3:prefix:
+                        - clients/apex-mutual/brief/latest.json
+                        - clients/bluemesa-payments/brief/latest.json
+                        - clients/northstar-health/brief/latest.json
+                        - clients/peakcart-retail/brief/latest.json
+                - !Ref "AWS::NoValue"
+              - Sid: ReadOnlyScopedBrief
+                Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucketName}/tenants/*/clients/*/projects/*/brief/approved/v*/packet.json"
+                  - !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucketName}/tenants/*/clients/*/projects/*/brief/latest.json"
+              - Sid: ReadWriteScopedHandoff
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:PutObjectTagging
+                  - s3:DeleteObjectVersion
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucketName}/tenants/*/clients/*/projects/*/handoff/*"
+              - !If
+                - AllowsLegacyDemoBrief
+                - Sid: ReadOnlyExplicitDemoBriefKeys
+                  Effect: Allow
+                  Action: s3:GetObject
+                  Resource:
+                    - !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucketName}/clients/apex-mutual/brief/latest.json"
+                    - !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucketName}/clients/bluemesa-payments/brief/latest.json"
+                    - !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucketName}/clients/northstar-health/brief/latest.json"
+                    - !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucketName}/clients/peakcart-retail/brief/latest.json"
+                - !Ref "AWS::NoValue"
+              - Sid: UpdateOnlyProjectStateTable
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:TransactWriteItems
+                Resource: !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ProjectStateTableName}"
+              - Sid: ReadScopeSigningSecret
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref ScopeSigningSecret
+              - !If
+                - HasDataKmsKey
+                - Sid: UseConfiguredDataKeyForArtifactsAndSecret
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:Encrypt
+                    - kms:GenerateDataKey
+                    - kms:DescribeKey
+                  Resource: !Ref DataKmsKeyArn
+                - !Ref "AWS::NoValue"
+              - Sid: WriteToolLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${AgentToolsLogGroup.Arn}:*"
+              - Sid: PublishToolTraces
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                  - xray:GetSamplingStatisticSummaries
+                Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-agent-tools-role"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: ManagedBy
+          Value: cloudformation
+
+  AgentToolsFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: AgentToolsLogGroup
+    Properties:
+      FunctionName: !Sub "${ResourcePrefix}-agent-tools"
+      Description: Five narrowly scoped project-state and artifact tools for AgentCore Gateway.
+      CodeUri: ../backend/agentcore
+      Handler: tools.handler.handler
+      Role: !GetAtt AgentToolsRole.Arn
+      Layers: [!Ref AgentLambdaSdkLayer]
+      Timeout: 30
+      MemorySize: 512
+      Environment:
+        Variables:
+          ARTIFACT_BUCKET: !Ref ArtifactBucketName
+          PROJECT_TABLE: !Ref ProjectStateTableName
+          SCOPE_SECRET_ARN: !Ref ScopeSigningSecret
+          DATA_KMS_KEY_ARN: !If [HasDataKmsKey, !Ref DataKmsKeyArn, !Ref "AWS::NoValue"]
+          DEMO_TENANT_ID: !Ref DemoTenantId
+          DEMO_LEGACY_CLIENT_ID: !Ref DemoLegacyClientId
+          DEMO_ALLOWED_CLIENT_IDS: !Ref DemoAllowedClientIds
+          ALLOW_LEGACY_DEMO_BRIEF: !Ref AllowLegacyDemoBrief
+      Tags:
+        Name: !Sub "${ResourcePrefix}-agent-tools"
+
+  AgentGatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-agent-gateway-role"
+      Description: Allows only the PilarPrep Gateway to invoke its tool Lambda.
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundaryArn, !Ref "AWS::NoValue"]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${ResourcePrefix}-invoke-agent-tools"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt AgentToolsFunction.Arn
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-agent-gateway-role"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ProjectGateway:
+    Type: AWS::BedrockAgentCore::Gateway
+    Properties:
+      Name: !Sub "${ResourcePrefix}-project-gateway"
+      Description: Governed PilarPrep project tools exposed over MCP with IAM authorization.
+      AuthorizerType: AWS_IAM
+      RoleArn: !GetAtt AgentGatewayRole.Arn
+      Tags:
+        Name: !Sub "${ResourcePrefix}-project-gateway"
+        Project: !Ref ProjectName
+        Application: sa-briefing-generator
+        Environment: !Ref EnvironmentName
+        Owner: !Ref Owner
+        CostCenter: !Ref CostCenter
+        ManagedBy: cloudformation
+        Repository: aadams35/pilarprep-aws
+        DataClassification: demo
+
+  ProjectGatewayTarget:
+    Type: AWS::BedrockAgentCore::GatewayTarget
+    Properties:
+      GatewayIdentifier: !GetAtt ProjectGateway.GatewayIdentifier
+      Name: project-tools
+      Description: Project-scoped read, state-update, handoff, and catch-up tools.
+      CredentialProviderConfigurations:
+        - CredentialProviderType: GATEWAY_IAM_ROLE
+      TargetConfiguration:
+        Mcp:
+          Lambda:
+            LambdaArn: !GetAtt AgentToolsFunction.Arn
+            ToolSchema:
+              InlinePayload:
+                - Name: get_latest_brief
+                  Description: Read the latest approved brief for the already authorized project scope.
+                  InputSchema:
+                    Type: object
+                    Properties:
+                      scopeToken: {Type: string}
+                      tenantId: {Type: string}
+                      clientId: {Type: string}
+                      projectId: {Type: string}
+                    Required: [scopeToken, tenantId, clientId, projectId]
+                - Name: get_project_state
+                  Description: Read authoritative assumptions, decisions, risks, actions, owners, milestones, and open questions.
+                  InputSchema:
+                    Type: object
+                    Properties:
+                      scopeToken: {Type: string}
+                      tenantId: {Type: string}
+                      clientId: {Type: string}
+                      projectId: {Type: string}
+                    Required: [scopeToken, tenantId, clientId, projectId]
+                - Name: save_project_update
+                  Description: Conditionally save a schema-validated and auditable project-state update after user confirmation.
+                  InputSchema:
+                    Type: object
+                    Properties:
+                      scopeToken: {Type: string}
+                      tenantId: {Type: string}
+                      clientId: {Type: string}
+                      projectId: {Type: string}
+                      update: {Type: object}
+                      expectedVersion: {Type: integer}
+                      idempotencyKey: {Type: string}
+                      confirmWrite: {Type: boolean}
+                    Required: [scopeToken, tenantId, clientId, projectId, update, expectedVersion, idempotencyKey, confirmWrite]
+                - Name: create_handoff_packet
+                  Description: Replace the latest scoped handoff JSON and DOCX after explicit confirmation.
+                  InputSchema:
+                    Type: object
+                    Properties:
+                      scopeToken: {Type: string}
+                      tenantId: {Type: string}
+                      clientId: {Type: string}
+                      projectId: {Type: string}
+                      packet: {Type: object}
+                      audience: {Type: string}
+                      idempotencyKey: {Type: string}
+                      confirmWrite: {Type: boolean}
+                    Required: [scopeToken, tenantId, clientId, projectId, packet, audience, idempotencyKey, confirmWrite]
+                - Name: generate_catchup
+                  Description: Return project evidence organized for an authorized audience role and focus.
+                  InputSchema:
+                    Type: object
+                    Properties:
+                      scopeToken: {Type: string}
+                      tenantId: {Type: string}
+                      clientId: {Type: string}
+                      projectId: {Type: string}
+                      audienceRole: {Type: string}
+                      focus: {Type: string}
+                    Required: [scopeToken, tenantId, clientId, projectId, audienceRole]
+
+  AgentToolsGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref AgentToolsFunction
+      Principal: bedrock-agentcore.amazonaws.com
+      SourceArn: !GetAtt ProjectGateway.GatewayArn
+
+  ProjectMemory:
+    Type: AWS::BedrockAgentCore::Memory
+    Properties:
+      Name: PilarPrepProjectMemory
+      Description: Project-scoped conversational continuity for approved PilarPrep handoffs.
+      EventExpiryDuration: 7
+      Tags:
+        Name: !Sub "${ResourcePrefix}-project-memory"
+        Project: !Ref ProjectName
+        Application: sa-briefing-generator
+        Environment: !Ref EnvironmentName
+        Owner: !Ref Owner
+        CostCenter: !Ref CostCenter
+        ManagedBy: cloudformation
+        Repository: aadams35/pilarprep-aws
+        DataClassification: demo
+
+  AgentRuntimeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-agent-runtime-role"
+      Description: Least-privilege Bedrock, Gateway, Memory, and telemetry access for PilarPrep Runtime.
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundaryArn, !Ref "AWS::NoValue"]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${ResourcePrefix}-agent-runtime"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: DetectPiiBeforeAgentProcessing
+                Effect: Allow
+                Action: comprehend:DetectPiiEntities
+                Resource: "*"
+              - Sid: InvokeConfiguredModels
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${BedrockModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${BedrockAlternateModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${BedrockPremiumModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/${BedrockFoundationModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/${BedrockAlternateFoundationModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/${BedrockPremiumFoundationModelId}"
+              - !If
+                - HasKnowledgeBase
+                - Sid: RetrieveOnlyPilarPrepKnowledgeBase
+                  Effect: Allow
+                  Action: bedrock:Retrieve
+                  Resource: !Ref KnowledgeBaseArn
+                - !Ref "AWS::NoValue"
+              - !If
+                - HasBedrockGuardrail
+                - Sid: ApplyConfiguredBedrockGuardrail
+                  Effect: Allow
+                  Action: bedrock:ApplyGuardrail
+                  Resource: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:guardrail/${BedrockGuardrailId}"
+                - !Ref "AWS::NoValue"
+              - Sid: InvokeOnlyProjectGateway
+                Effect: Allow
+                Action: bedrock-agentcore:InvokeGateway
+                Resource: !GetAtt ProjectGateway.GatewayArn
+              - Sid: UseOnlyProjectMemory
+                Effect: Allow
+                Action:
+                  - bedrock-agentcore:CreateEvent
+                  - bedrock-agentcore:ListEvents
+                  - bedrock-agentcore:GetEvent
+                  - bedrock-agentcore:DeleteEvent
+                  - bedrock-agentcore:RetrieveMemoryRecords
+                  - bedrock-agentcore:GetMemoryRecord
+                Resource: !GetAtt ProjectMemory.MemoryArn
+              - Sid: ReadRuntimeCode
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${RuntimeCodeBucket}/${RuntimeCodeKey}"
+              - Sid: PublishRuntimeTelemetry
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - cloudwatch:PutMetricData
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                  - xray:GetSamplingStatisticSummaries
+                Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-agent-runtime-role"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ProjectAgentRuntime:
+    Type: AWS::BedrockAgentCore::Runtime
+    Properties:
+      AgentRuntimeName: !Ref AgentRuntimeName
+      Description: Strands project agent for grounded handoff, governed state updates, and role-aware catch-up.
+      AgentRuntimeArtifact:
+        CodeConfiguration:
+          Code:
+            S3:
+              Bucket: !Ref RuntimeCodeBucket
+              Prefix: !Ref RuntimeCodeKey
+          Runtime: PYTHON_3_12
+          EntryPoint: [main.py]
+      RoleArn: !GetAtt AgentRuntimeRole.Arn
+      NetworkConfiguration:
+        NetworkMode: PUBLIC
+      ProtocolConfiguration: HTTP
+      EnvironmentVariables:
+        AWS_REGION: !Ref AWS::Region
+        GATEWAY_URL: !GetAtt ProjectGateway.GatewayUrl
+        GATEWAY_TARGET_NAME: project-tools
+        AGENTCORE_MEMORY_ID: !GetAtt ProjectMemory.MemoryId
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+        BEDROCK_ALTERNATE_MODEL_ID: !Ref BedrockAlternateModelId
+        BEDROCK_PREMIUM_MODEL_ID: !Ref BedrockPremiumModelId
+        BEDROCK_GUARDRAIL_ID: !If [HasBedrockGuardrail, !Ref BedrockGuardrailId, !Ref "AWS::NoValue"]
+        BEDROCK_GUARDRAIL_VERSION: !If [HasBedrockGuardrail, !Ref BedrockGuardrailVersion, !Ref "AWS::NoValue"]
+        CONTENT_SAFETY_ENABLED: "true"
+        PII_SCREENING_ENABLED: "true"
+        KNOWLEDGE_BASE_ID: !If
+          - HasKnowledgeBase
+          - !Ref KnowledgeBaseId
+          - !Ref "AWS::NoValue"
+      Tags:
+        Name: !Sub "${ResourcePrefix}-project-agent"
+        Project: !Ref ProjectName
+        Application: sa-briefing-generator
+        Environment: !Ref EnvironmentName
+        Owner: !Ref Owner
+        CostCenter: !Ref CostCenter
+        ManagedBy: cloudformation
+        Repository: aadams35/pilarprep-aws
+        DataClassification: demo
+
+  ProjectRuntimePolicy:
+    Type: AWS::BedrockAgentCore::ResourcePolicy
+    Properties:
+      ResourceArn: !GetAtt ProjectAgentRuntime.AgentRuntimeArn
+      Policy: !If
+        - HasUnifiedWorkerRole
+        - !Sub |
+          {"Version":"2012-10-17","Statement":[{"Sid":"WorkersOnly","Effect":"Allow","Principal":{"AWS":["${AgentWorkerRole.Arn}","${UnifiedWorkerRoleArn}"]},"Action":"bedrock-agentcore:InvokeAgentRuntime","Resource":"${ProjectAgentRuntime.AgentRuntimeArn}"}]}
+        - !Sub |
+          {"Version":"2012-10-17","Statement":[{"Sid":"WorkerOnly","Effect":"Allow","Principal":{"AWS":"${AgentWorkerRole.Arn}"},"Action":"bedrock-agentcore:InvokeAgentRuntime","Resource":"${ProjectAgentRuntime.AgentRuntimeArn}"}]}
+
+  ProjectGatewayPolicy:
+    Type: AWS::BedrockAgentCore::ResourcePolicy
+    Properties:
+      ResourceArn: !GetAtt ProjectGateway.GatewayArn
+      Policy: !Sub |
+        {"Version":"2012-10-17","Statement":[{"Sid":"RuntimeOnly","Effect":"Allow","Principal":{"AWS":"${AgentRuntimeRole.Arn}"},"Action":"bedrock-agentcore:InvokeGateway","Resource":"${ProjectGateway.GatewayArn}"}]}
+
+  DemoAgentInvokePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${ResourcePrefix}-invoke-agent-api"
+      Roles: [!Ref DemoInvokeRoleName]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: InvokeOnlyProjectAgentRoute
+            Effect: Allow
+            Action: execute-api:Invoke
+            Resource: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${AgentApi}/*/POST/agent"
+
+  AgentRouterErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ResourcePrefix}-agent-router-errors"
+      AlarmDescription: AgentCore router Lambda errors during the demo.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AgentRouterFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-agent-router-errors"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  AgentToolsErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ResourcePrefix}-agent-tools-errors"
+      AlarmDescription: AgentCore Gateway tool Lambda errors during the demo.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AgentToolsFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-agent-tools-errors"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  AgentDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${ResourcePrefix}-agentcore"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 8,
+              "height": 5,
+              "properties": {
+                "title": "Agent Router Health",
+                "region": "${AWS::Region}",
+                "view": "singleValue",
+                "stat": "Sum",
+                "period": 86400,
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${AgentRouterFunction}", {"label": "Requests"}],
+                  [".", "Errors", ".", ".", {"label": "Errors"}],
+                  [".", "Throttles", ".", ".", {"label": "Throttles"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8,
+              "y": 0,
+              "width": 8,
+              "height": 5,
+              "properties": {
+                "title": "Governed Tool Health",
+                "region": "${AWS::Region}",
+                "view": "singleValue",
+                "stat": "Sum",
+                "period": 86400,
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${AgentToolsFunction}", {"label": "Tool calls"}],
+                  [".", "Errors", ".", ".", {"label": "Tool errors"}],
+                  [".", "Throttles", ".", ".", {"label": "Tool throttles"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16,
+              "y": 0,
+              "width": 8,
+              "height": 5,
+              "properties": {
+                "title": "Agent Latency p95",
+                "region": "${AWS::Region}",
+                "view": "singleValue",
+                "stat": "p95",
+                "period": 300,
+                "metrics": [
+                  ["AWS/Lambda", "Duration", "FunctionName", "${AgentRouterFunction}", {"label": "Router"}],
+                  [".", ".", ".", "${AgentToolsFunction}", {"label": "Tools"}]
+                ]
+              }
+            },
+            {
+              "type": "log",
+              "x": 0,
+              "y": 5,
+              "width": 12,
+              "height": 7,
+              "properties": {
+                "title": "Agent Outcomes and Fallbacks",
+                "region": "${AWS::Region}",
+                "query": "SOURCE '${AgentRouterLogGroup}' | fields @timestamp, event, action, provider, fallbackUsed, clientId, projectId, traceId, errorType | sort @timestamp desc | limit 50",
+                "view": "table"
+              }
+            },
+            {
+              "type": "log",
+              "x": 12,
+              "y": 5,
+              "width": 12,
+              "height": 7,
+              "properties": {
+                "title": "Scoped Tool Audit Trail",
+                "region": "${AWS::Region}",
+                "query": "SOURCE '${AgentToolsLogGroup}' | fields @timestamp, event, tool, clientId, projectId, traceId, errorType | sort @timestamp desc | limit 50",
+                "view": "table"
+              }
+            }
+          ]
+        }
+Outputs:
+  AgentApiUrl:
+    Description: IAM-authenticated PilarPrep AgentCore API endpoint.
+    Value: !Sub "https://${AgentApi}.execute-api.${AWS::Region}.amazonaws.com/agent"
+  AgentRuntimeArn:
+    Value: !GetAtt ProjectAgentRuntime.AgentRuntimeArn
+  AgentRuntimeId:
+    Value: !GetAtt ProjectAgentRuntime.AgentRuntimeId
+  AgentGatewayArn:
+    Value: !GetAtt ProjectGateway.GatewayArn
+  AgentGatewayUrl:
+    Value: !GetAtt ProjectGateway.GatewayUrl
+  AgentMemoryId:
+    Value: !GetAtt ProjectMemory.MemoryId
+  AgentToolsFunctionName:
+    Value: !Ref AgentToolsFunction
+  AgentRouterFunctionName:
+    Value: !Ref AgentRouterFunction
+  AgentWorkerFunctionName:
+    Value: !Ref AgentWorkerFunction
+  AgentWorkerFunctionRoleName:
+    Value: !Ref AgentWorkerRole
+  AgentDashboardName:
+    Value: !Ref AgentDashboard
+  AgentLambdaSdkLayerArn:
+    Value: !Ref AgentLambdaSdkLayer
+  ScopeSigningSecretArn:
+    Description: Internal secret used to sign project scope passed to AgentCore tools.
+    Value: !Ref ScopeSigningSecret

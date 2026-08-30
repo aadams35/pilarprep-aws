@@ -1,0 +1,10 @@
+{
+  "metadataAttributes": {
+    "scenarioId": "blue-mesa-payments",
+    "documentType": "current-aws-environment",
+    "version": 1,
+    "approved": true,
+    "visibility": "public-demo",
+    "sourceTitle": "Blue Mesa current AWS environment"
+  }
+}

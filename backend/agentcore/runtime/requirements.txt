@@ -1,0 +1,5 @@
+bedrock-agentcore==1.18.1
+boto3==1.43.54
+mcp-proxy-for-aws==1.6.4
+pydantic==2.13.4
+strands-agents==1.48.0

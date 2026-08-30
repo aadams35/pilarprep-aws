@@ -1,0 +1,34 @@
+{
+  "action": "generate_catchup",
+  "clientId": "bluemesa-payments",
+  "projectId": "bluemesa-payments",
+  "sessionId": "session-bluemesa-hackathon-demo-000001",
+  "audienceRole": "New member",
+  "focus": "Where should I start?",
+  "meetingNotes": "BlueMesa approved a discovery-to-pilot path with named resilience and compliance owners.",
+  "modelPreference": "nova-pro",
+  "confirmWrite": false,
+  "idempotencyKey": "catchup-bluemesa-demo-000001",
+  "approvedBrief": {},
+  "briefRequest": {
+    "mode": "project",
+    "modelPreference": "nova-pro",
+    "company": "BlueMesa Payments",
+    "industry": "Financial Services",
+    "meetingType": "Executive Briefing",
+    "companySize": "Enterprise",
+    "pillars": ["Security", "Reliability", "Operational Excellence"],
+    "context": "BlueMesa is consolidating acquired payment systems before holiday volume.",
+    "role": "New member",
+    "prompt": "Where should I start?"
+  },
+  "scope": {
+    "tenantId": "demo",
+    "clientId": "bluemesa-payments",
+    "projectId": "bluemesa-payments",
+    "userId": "user-bluemesa-demo-000001",
+    "sessionId": "session-bluemesa-hackathon-demo-000001"
+  },
+  "scopeToken": "local-mock-scope-token-not-sent-to-aws",
+  "traceId": "trace-bluemesa-catchup-demo-000001"
+}

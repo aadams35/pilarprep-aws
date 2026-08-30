@@ -1,0 +1,1207 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: PilarPrep Bedrock briefing backend
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Workload identity
+        Parameters:
+          - ResourcePrefix
+          - ProjectName
+          - EnvironmentName
+          - Owner
+          - CostCenter
+      - Label:
+          default: Bedrock and API settings
+        Parameters:
+          - BedrockModelId
+          - BedrockAlternateModelId
+          - BedrockPremiumModelId
+          - BedrockFoundationModelId
+          - BedrockAlternateFoundationModelId
+          - BedrockPremiumFoundationModelId
+          - AllowedOrigin
+          - SecondaryAllowedOrigin
+          - PillarPrepApiKey
+          - PermissionsBoundaryArn
+          - DailyBudgetLimitUsd
+          - BudgetNotificationEmail
+    ParameterLabels:
+      ResourcePrefix:
+        default: Resource name prefix
+      ProjectName:
+        default: Project tag
+      EnvironmentName:
+        default: Environment tag
+      Owner:
+        default: Owner tag
+      CostCenter:
+        default: Cost center tag
+
+Parameters:
+  ResourcePrefix:
+    Type: String
+    Default: pillarprep-demo
+    Description: Lowercase prefix used for safe display names and Name tags.
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{2,40}$"
+  ProjectName:
+    Type: String
+    Default: PilarPrep
+  EnvironmentName:
+    Type: String
+    Default: demo
+  Owner:
+    Type: String
+    Default: austin-adams
+  CostCenter:
+    Type: String
+    Default: hackathon
+  BedrockModelId:
+    Type: String
+    Default: us.amazon.nova-pro-v1:0
+  BedrockAlternateModelId:
+    Type: String
+    Default: us.amazon.nova-micro-v1:0
+    Description: Secondary Bedrock model ID allowed for runtime switching.
+  BedrockPremiumModelId:
+    Type: String
+    Default: global.anthropic.claude-sonnet-4-6
+    Description: Optional high-detail Bedrock model exposed for controlled testing.
+  BedrockFoundationModelId:
+    Type: String
+    Default: amazon.nova-pro-v1:0
+    Description: Primary Bedrock foundation model ARN segment allowed by the Lambda IAM role.
+  BedrockAlternateFoundationModelId:
+    Type: String
+    Default: amazon.nova-micro-v1:0
+    Description: Secondary Bedrock foundation model ARN segment allowed by the Lambda IAM role.
+  BedrockPremiumFoundationModelId:
+    Type: String
+    Default: anthropic.claude-sonnet-4-6
+    Description: High-detail foundation model ARN segment allowed by the Lambda IAM role.
+  AllowedOrigin:
+    Type: String
+    Description: HTTPS origin of your deployment, without a trailing slash.
+  SecondaryAllowedOrigin:
+    Type: String
+    Default: ""
+    Description: Optional second browser origin for the AWS CloudFront deployment.
+  PillarPrepApiKey:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: Optional shared secret required in the x-api-key header.
+  PermissionsBoundaryArn:
+    Type: String
+    Default: ""
+    Description: Optional IAM permissions boundary ARN attached to the Lambda execution role.
+  DailyBudgetLimitUsd:
+    Type: Number
+    Default: 1
+    MinValue: 0.01
+    Description: Daily account-level AWS Budget limit for the demo guardrail.
+  BudgetNotificationEmail:
+    Type: String
+    Default: ""
+    Description: Optional email address for AWS Budget threshold alerts.
+  UseCustomerManagedKmsKey:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Create and use a rotating customer-managed key for PilarPrep data at rest.
+
+
+Conditions:
+  HasSecondaryAllowedOrigin: !Not [!Equals [!Ref SecondaryAllowedOrigin, ""]]
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, ""]]
+  HasBudgetNotificationEmail: !Not [!Equals [!Ref BudgetNotificationEmail, ""]]
+  UseDataKmsKey: !Equals [!Ref UseCustomerManagedKmsKey, "true"]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 512
+    Tracing: Active
+    Environment:
+      Variables:
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+        BEDROCK_PREMIUM_MODEL_ID: !Ref BedrockPremiumModelId
+        BEDROCK_ALLOWED_MODEL_IDS: !Join [",", [!Ref BedrockModelId, !Ref BedrockAlternateModelId, !Ref BedrockPremiumModelId]]
+        ALLOWED_ORIGIN: !Ref AllowedOrigin
+        ARTIFACT_BUCKET: !Ref BriefArtifactsBucket
+        PROJECT_TABLE: !Ref ProjectStateTable
+        PILLARPREP_API_KEY: !Ref PillarPrepApiKey
+        BEDROCK_GUARDRAIL_ID: !GetAtt BriefSafetyGuardrail.GuardrailId
+        BEDROCK_GUARDRAIL_VERSION: !GetAtt BriefSafetyGuardrailVersion.Version
+        DATA_KMS_KEY_ARN: !If
+          - UseDataKmsKey
+          - !GetAtt DataEncryptionKey.Arn
+          - !Ref AWS::NoValue
+
+Resources:
+  DataEncryptionKey:
+    Type: AWS::KMS::Key
+    Condition: UseDataKmsKey
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Customer-managed encryption key for PilarPrep artifacts, state, queues, and evidence.
+      EnableKeyRotation: true
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EnableAccountIamPolicies
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action: kms:*
+            Resource: "*"
+          - Sid: AllowEventBridgeForEncryptedJobQueue
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: AllowS3VectorsIndexMaintenance
+            Effect: Allow
+            Principal:
+              Service: indexing.s3vectors.amazonaws.com
+            Action: kms:Decrypt
+            Resource: "*"
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:s3vectors:${AWS::Region}:${AWS::AccountId}:bucket/*"
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ForAnyValue:StringEquals:
+                kms:EncryptionContextKeys:
+                  - aws:s3vectors:arn
+                  - aws:s3vectors:resource-id
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-data"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: DataClassification
+          Value: confidential
+
+  DataEncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Condition: UseDataKmsKey
+    Properties:
+      AliasName: !Sub "alias/${ResourcePrefix}-data"
+      TargetKeyId: !Ref DataEncryptionKey
+
+  BriefApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Name: !Sub "${ResourcePrefix}-brief-api"
+      Description: !Sub "${ProjectName} ${EnvironmentName} HTTP API for SA brief generation"
+      PropagateTags: true
+      Tags:
+        Name: !Sub "${ResourcePrefix}-brief-api"
+        Project: !Ref ProjectName
+        Application: sa-briefing-generator
+        Environment: !Ref EnvironmentName
+        Owner: !Ref Owner
+        CostCenter: !Ref CostCenter
+        ManagedBy: cloudformation
+        Repository: aadams35/pilarprep-aws
+        DataClassification: demo
+      Auth:
+        EnableIamAuthorizer: true
+        DefaultAuthorizer: AWS_IAM
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref AllowedOrigin
+          - !If [HasSecondaryAllowedOrigin, !Ref SecondaryAllowedOrigin, !Ref "AWS::NoValue"]
+        AllowHeaders:
+          - accept
+          - authorization
+          - content-type
+          - x-amz-content-sha256
+          - x-amz-date
+          - x-amz-security-token
+        AllowMethods:
+          - POST
+          - OPTIONS
+  DemoInvokeIdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: !Sub "${ResourcePrefix}-demo-identities"
+      AllowUnauthenticatedIdentities: true
+      AllowClassicFlow: false
+      IdentityPoolTags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-demo-identities"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+
+  DemoInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-demo-api-invoke-role"
+      Description: !Sub "Public demo IAM role allowed only to invoke ${ProjectName} ${EnvironmentName} brief API"
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundaryArn, !Ref "AWS::NoValue"]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                cognito-identity.amazonaws.com:aud: !Ref DemoInvokeIdentityPool
+              ForAnyValue:StringLike:
+                cognito-identity.amazonaws.com:amr: unauthenticated
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-demo-api-invoke-role"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+      Policies:
+        - PolicyName: !Sub "${ResourcePrefix}-invoke-brief-api"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InvokeOnlyBriefRoute
+                Effect: Allow
+                Action: execute-api:Invoke
+                Resource: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${BriefApi}/*/POST/brief"
+
+  DemoIdentityPoolRoleAttachment:
+    Type: AWS::Cognito::IdentityPoolRoleAttachment
+    Properties:
+      IdentityPoolId: !Ref DemoInvokeIdentityPool
+      Roles:
+        unauthenticated: !GetAtt DemoInvokeRole.Arn
+
+  BriefFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ResourcePrefix}-brief-generator"
+      RetentionInDays: 14
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-brief-generator-logs"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+
+  BriefWorkerFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ResourcePrefix}-brief-worker"
+      RetentionInDays: 14
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-brief-worker-logs"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+
+  BriefFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-brief-generator-role"
+      Description: !Sub "Least-privilege Lambda role for ${ProjectName} ${EnvironmentName} brief generation"
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundaryArn, !Ref "AWS::NoValue"]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-brief-generator-role"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+      Policies:
+        - PolicyName: !Sub "${ResourcePrefix}-lambda-logs"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteOwnLambdaLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ResourcePrefix}-brief-generator:*"
+        - PolicyName: !Sub "${ResourcePrefix}-xray-tracing"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: PublishXRayTraceSegments
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: "*"
+        - PolicyName: !Sub "${ResourcePrefix}-bedrock-invoke"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InvokeConfiguredBedrockModel
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/${BedrockFoundationModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/${BedrockAlternateFoundationModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/${BedrockPremiumFoundationModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/${BedrockModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/${BedrockAlternateModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/${BedrockPremiumModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:application-inference-profile/*"
+              - Sid: ApplyConfiguredBedrockGuardrail
+                Effect: Allow
+                Action:
+                  - bedrock:ApplyGuardrail
+                Resource: !GetAtt BriefSafetyGuardrail.GuardrailArn
+        - PolicyName: !Sub "${ResourcePrefix}-project-artifacts"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ListGeneratedArtifacts
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                Resource: !GetAtt BriefArtifactsBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - clients/*/brief/
+                      - clients/*/brief/*
+                      - clients/*/handoff/
+                      - clients/*/handoff/*
+              - Sid: WriteGeneratedArtifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                Resource:
+                  - !Sub "${BriefArtifactsBucket.Arn}/clients/*/brief/*"
+                  - !Sub "${BriefArtifactsBucket.Arn}/clients/*/handoff/*"
+              - Sid: UpdateProjectState
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt ProjectStateTable.Arn
+        - !If
+          - UseDataKmsKey
+          - PolicyName: !Sub "${ResourcePrefix}-data-key-access"
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Sid: UsePilarPrepDataEncryptionKey
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:DescribeKey
+                    - kms:Encrypt
+                    - kms:GenerateDataKey*
+                    - kms:ReEncrypt*
+                  Resource: !GetAtt DataEncryptionKey.Arn
+          - !Ref "AWS::NoValue"
+        - PolicyName: !Sub "${ResourcePrefix}-invoke-brief-worker"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InvokeOnlyBriefWorker
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ResourcePrefix}-brief-worker"
+
+  BriefWorkerFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-brief-worker-role"
+      Description: !Sub "Least-privilege Lambda role for ${ProjectName} ${EnvironmentName} asynchronous packet generation"
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundaryArn, !Ref "AWS::NoValue"]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-brief-worker-role"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+      Policies:
+        - PolicyName: !Sub "${ResourcePrefix}-worker-lambda-logs"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteOwnLambdaLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ResourcePrefix}-brief-worker:*"
+        - PolicyName: !Sub "${ResourcePrefix}-worker-xray-tracing"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: PublishXRayTraceSegments
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: "*"
+        - PolicyName: !Sub "${ResourcePrefix}-worker-bedrock-invoke"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InvokeConfiguredBedrockModel
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/${BedrockFoundationModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/${BedrockAlternateFoundationModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/${BedrockPremiumFoundationModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/${BedrockModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/${BedrockAlternateModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/${BedrockPremiumModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:application-inference-profile/*"
+              - Sid: ApplyConfiguredBedrockGuardrail
+                Effect: Allow
+                Action:
+                  - bedrock:ApplyGuardrail
+                Resource: !GetAtt BriefSafetyGuardrail.GuardrailArn
+        - PolicyName: !Sub "${ResourcePrefix}-worker-project-artifacts"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ListGeneratedArtifacts
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                Resource: !GetAtt BriefArtifactsBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - clients/*/brief/
+                      - clients/*/brief/*
+                      - clients/*/handoff/
+                      - clients/*/handoff/*
+              - Sid: WriteGeneratedArtifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                Resource:
+                  - !Sub "${BriefArtifactsBucket.Arn}/clients/*/brief/*"
+                  - !Sub "${BriefArtifactsBucket.Arn}/clients/*/handoff/*"
+              - Sid: UpdateProjectState
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt ProjectStateTable.Arn
+        - !If
+          - UseDataKmsKey
+          - PolicyName: !Sub "${ResourcePrefix}-worker-data-key-access"
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Sid: UsePilarPrepDataEncryptionKey
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:DescribeKey
+                    - kms:Encrypt
+                    - kms:GenerateDataKey*
+                    - kms:ReEncrypt*
+                  Resource: !GetAtt DataEncryptionKey.Arn
+          - !Ref "AWS::NoValue"
+  BriefFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - BriefFunctionLogGroup
+    Properties:
+      FunctionName: !Sub "${ResourcePrefix}-brief-generator"
+      Description: !Sub "${ProjectName} ${EnvironmentName} Bedrock brief generator and Project model handler"
+      CodeUri: ../backend/bedrock
+      Handler: brief_generator.handler
+      Role: !GetAtt BriefFunctionRole.Arn
+      Environment:
+        Variables:
+          BRIEF_WORKER_FUNCTION: !Sub "${ResourcePrefix}-brief-worker"
+      PropagateTags: true
+      Tags:
+        Name: !Sub "${ResourcePrefix}-brief-generator"
+        Project: !Ref ProjectName
+        Application: sa-briefing-generator
+        Environment: !Ref EnvironmentName
+        Owner: !Ref Owner
+        CostCenter: !Ref CostCenter
+        ManagedBy: cloudformation
+        Repository: aadams35/pilarprep-aws
+        DataClassification: demo
+      Events:
+        GenerateBrief:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref BriefApi
+            Path: /brief
+            Method: POST
+
+  BriefWorkerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - BriefWorkerFunctionLogGroup
+    Properties:
+      FunctionName: !Sub "${ResourcePrefix}-brief-worker"
+      Description: !Sub "${ProjectName} ${EnvironmentName} asynchronous Bedrock packet worker"
+      CodeUri: ../backend/bedrock
+      Handler: brief_generator.worker_handler
+      Role: !GetAtt BriefWorkerFunctionRole.Arn
+      Timeout: 600
+      PropagateTags: true
+      Tags:
+        Name: !Sub "${ResourcePrefix}-brief-worker"
+        Project: !Ref ProjectName
+        Application: sa-briefing-generator
+        Environment: !Ref EnvironmentName
+        Owner: !Ref Owner
+        CostCenter: !Ref CostCenter
+        ManagedBy: cloudformation
+        Repository: aadams35/pilarprep-aws
+        DataClassification: demo
+
+  BriefArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: !If [UseDataKmsKey, "aws:kms", AES256]
+              KMSMasterKeyID: !If
+                - UseDataKmsKey
+                - !GetAtt DataEncryptionKey.Arn
+                - !Ref AWS::NoValue
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireTransientJobPayloads
+            Status: Enabled
+            Prefix: jobs/
+            ExpirationInDays: 1
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 1
+          - Id: ExpireTemporaryGuestWorkspaceArtifacts
+            Status: Enabled
+            TagFilters:
+              - Key: RetentionClass
+                Value: guest-temporary
+            ExpirationInDays: 7
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 1
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-brief-artifacts"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+
+  BriefArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BriefArtifactsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt BriefArtifactsBucket.Arn
+              - !Sub "${BriefArtifactsBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  ProjectStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      DeletionProtectionEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !If
+          - UseDataKmsKey
+          - !GetAtt DataEncryptionKey.Arn
+          - !Ref AWS::NoValue
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      AttributeDefinitions:
+        - AttributeName: projectId
+          AttributeType: S
+        - AttributeName: sortKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: projectId
+          KeyType: HASH
+        - AttributeName: sortKey
+          KeyType: RANGE
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-project-state"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+
+  BriefSafetyGuardrail:
+    Type: AWS::Bedrock::Guardrail
+    Properties:
+      Name: !Sub "${ResourcePrefix}-brief-safety"
+      Description: !Sub "${ProjectName} ${EnvironmentName} safety guardrail for generated SA briefing content"
+      BlockedInputMessaging: "PilarPrep blocked this request because it does not meet the demo safety policy. Please remove sensitive or unsafe content and try again."
+      BlockedOutputsMessaging: "PilarPrep blocked the model response because it does not meet the demo safety policy. Please refine the prompt and try again."
+      ContentPolicyConfig:
+        FiltersConfig:
+          - Type: HATE
+            InputStrength: MEDIUM
+            OutputStrength: MEDIUM
+          - Type: INSULTS
+            InputStrength: MEDIUM
+            OutputStrength: MEDIUM
+          - Type: SEXUAL
+            InputStrength: MEDIUM
+            OutputStrength: MEDIUM
+          - Type: VIOLENCE
+            InputStrength: MEDIUM
+            OutputStrength: MEDIUM
+          - Type: MISCONDUCT
+            InputStrength: MEDIUM
+            OutputStrength: MEDIUM
+          - Type: PROMPT_ATTACK
+            InputStrength: HIGH
+            OutputStrength: NONE
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-brief-safety"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+
+  BriefSafetyGuardrailVersion:
+    Type: AWS::Bedrock::GuardrailVersion
+    Properties:
+      GuardrailIdentifier: !GetAtt BriefSafetyGuardrail.GuardrailId
+      Description: !Sub "${ProjectName} ${EnvironmentName} briefing safety policy version"
+
+  BriefFunctionErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ResourcePrefix}-brief-generator-errors"
+      AlarmDescription: !Sub "${ProjectName} ${EnvironmentName} Lambda has one or more failed invocations in five minutes."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref BriefFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-brief-generator-errors"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+
+  BriefFunctionThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ResourcePrefix}-brief-generator-throttles"
+      AlarmDescription: !Sub "${ProjectName} ${EnvironmentName} Lambda throttled one or more requests in five minutes."
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref BriefFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-brief-generator-throttles"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+
+  BriefFunctionDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ResourcePrefix}-brief-generator-slow"
+      AlarmDescription: !Sub "${ProjectName} ${EnvironmentName} Lambda average duration is over 20 seconds in five minutes."
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref BriefFunction
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 20000
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-brief-generator-slow"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+  PillarPrepDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${ResourcePrefix}-ops-dashboard"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-ops-dashboard"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 8,
+              "height": 5,
+              "properties": {
+                "title": "Brief Pipeline Health",
+                "region": "${AWS::Region}",
+                "view": "singleValue",
+                "stat": "Sum",
+                "period": 86400,
+                "metrics": [
+                  ["PilarPrep", "BriefRequests", "Service", "BriefFunction", {"label": "Requests"}],
+                  [".", "BriefSuccess", ".", ".", {"label": "Successful packets"}],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${BriefFunction}", {"label": "Lambda errors"}],
+                  [".", "Throttles", ".", ".", {"label": "Throttles"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8,
+              "y": 0,
+              "width": 8,
+              "height": 5,
+              "properties": {
+                "title": "Estimated Bedrock Spend",
+                "region": "${AWS::Region}",
+                "view": "singleValue",
+                "stat": "Sum",
+                "period": 86400,
+                "metrics": [
+                  ["PilarPrep", "BriefEstimatedCostUsd", "Service", "BriefFunction", "ModelId", "${BedrockModelId}", {"label": "Nova Pro"}],
+                  [".", ".", ".", ".", ".", "${BedrockAlternateModelId}", {"label": "Nova Micro"}],
+                  [".", ".", ".", ".", ".", "${BedrockPremiumModelId}", {"label": "Claude Sonnet 4.6"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16,
+              "y": 0,
+              "width": 8,
+              "height": 5,
+              "properties": {
+                "title": "Model Latency p95",
+                "region": "${AWS::Region}",
+                "view": "singleValue",
+                "stat": "p95",
+                "period": 300,
+                "metrics": [
+                  ["PilarPrep", "BriefModelLatencyMs", "Service", "BriefFunction", "ModelId", "${BedrockModelId}", {"label": "Nova Pro"}],
+                  [".", ".", ".", ".", ".", "${BedrockAlternateModelId}", {"label": "Nova Micro"}],
+                  [".", ".", ".", ".", ".", "${BedrockPremiumModelId}", {"label": "Claude Sonnet 4.6"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 5,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Bedrock Token Volume by Model",
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stat": "Sum",
+                "period": 300,
+                "yAxis": {"left": {"min": 0}},
+                "metrics": [
+                  ["PilarPrep", "BriefInputTokens", "Service", "BriefFunction", "ModelId", "${BedrockModelId}", {"label": "Nova Pro input"}],
+                  [".", "BriefOutputTokens", ".", ".", ".", ".", {"label": "Nova Pro output"}],
+                  [".", "BriefInputTokens", ".", ".", ".", "${BedrockAlternateModelId}", {"label": "Nova Micro input"}],
+                  [".", "BriefOutputTokens", ".", ".", ".", ".", {"label": "Nova Micro output"}],
+                  [".", "BriefInputTokens", ".", ".", ".", "${BedrockPremiumModelId}", {"label": "Claude Sonnet 4.6 input"}],
+                  [".", "BriefOutputTokens", ".", ".", ".", ".", {"label": "Claude Sonnet 4.6 output"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 5,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "API and Lambda Reliability",
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "period": 300,
+                "metrics": [
+                  ["AWS/ApiGateway", "Count", "ApiId", "${BriefApi}", {"stat": "Sum", "label": "API requests"}],
+                  [".", "4xx", ".", ".", {"stat": "Sum", "label": "API 4xx"}],
+                  [".", "5xx", ".", ".", {"stat": "Sum", "label": "API 5xx"}],
+                  ["AWS/Lambda", "Duration", "FunctionName", "${BriefFunction}", {"stat": "p95", "label": "Lambda duration p95"}],
+                  [".", "Errors", ".", ".", {"stat": "Sum", "label": "Lambda errors"}]
+                ]
+              }
+            },
+            {
+              "type": "log",
+              "x": 0,
+              "y": 11,
+              "width": 24,
+              "height": 7,
+              "properties": {
+                "title": "Recent Brief Generation Evidence",
+                "region": "${AWS::Region}",
+                "query": "SOURCE '/aws/lambda/${BriefFunction}' | fields @timestamp, @message | filter @message like /BriefModelInvocations|BriefSuccess|BriefErrors|ERROR/ | sort @timestamp desc | limit 50",
+                "view": "table"
+              }
+            }
+          ]
+        }
+  DemoDailyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub "${ResourcePrefix}-daily-demo-budget"
+        BudgetLimit:
+          Amount: !Ref DailyBudgetLimitUsd
+          Unit: USD
+        BudgetType: COST
+        TimeUnit: DAILY
+      NotificationsWithSubscribers: !If
+        - HasBudgetNotificationEmail
+        - - Notification:
+              NotificationType: ACTUAL
+              ComparisonOperator: GREATER_THAN
+              Threshold: 80
+              ThresholdType: PERCENTAGE
+            Subscribers:
+              - SubscriptionType: EMAIL
+                Address: !Ref BudgetNotificationEmail
+          - Notification:
+              NotificationType: ACTUAL
+              ComparisonOperator: GREATER_THAN
+              Threshold: 100
+              ThresholdType: PERCENTAGE
+            Subscribers:
+              - SubscriptionType: EMAIL
+                Address: !Ref BudgetNotificationEmail
+        - !Ref "AWS::NoValue"
+
+Outputs:
+  DataEncryptionKeyArn:
+    Description: Customer-managed KMS key used for PilarPrep data, or empty when disabled.
+    Value: !If [UseDataKmsKey, !GetAtt DataEncryptionKey.Arn, ""]
+    Export:
+      Name: !Sub "${AWS::StackName}-DataEncryptionKeyArn"
+
+  BriefApiUrl:
+    Description: API Gateway endpoint for PilarPrep brief generation
+    Value: !Sub "https://${BriefApi}.execute-api.${AWS::Region}.amazonaws.com/brief"
+  ResourceNamePrefix:
+    Description: Name prefix used in tags and safe display names
+    Value: !Ref ResourcePrefix
+  ArtifactBucketName:
+    Description: S3 bucket for approved briefs and project artifacts
+    Value: !Ref BriefArtifactsBucket
+  ProjectStateTableName:
+    Description: DynamoDB table for project state
+    Value: !Ref ProjectStateTable
+  BriefFunctionRoleName:
+    Description: IAM role used by the Lambda brief generator
+    Value: !Ref BriefFunctionRole
+  BriefFunctionArn:
+    Description: Existing brief Lambda ARN used as the AgentCore fallback
+    Value: !GetAtt BriefFunction.Arn
+  BriefWorkerFunctionArn:
+    Description: Asynchronous worker ARN used for Nova Pro packet generation
+    Value: !GetAtt BriefWorkerFunction.Arn
+  BriefWorkerFunctionRoleName:
+    Description: Least-privilege IAM role used by the asynchronous brief worker
+    Value: !Ref BriefWorkerFunctionRole
+  DemoIdentityPoolId:
+    Description: Cognito Identity Pool ID that issues short-lived demo credentials
+    Value: !Ref DemoInvokeIdentityPool
+  DemoInvokeRoleName:
+    Description: IAM role assumed by unauthenticated demo identities
+    Value: !Ref DemoInvokeRole
+  BedrockGuardrailId:
+    Description: Bedrock Guardrail ID applied to brief generation
+    Value: !GetAtt BriefSafetyGuardrail.GuardrailId
+  BedrockGuardrailVersion:
+    Description: Bedrock Guardrail version applied to brief generation
+    Value: !GetAtt BriefSafetyGuardrailVersion.Version
+  BriefFunctionErrorAlarmName:
+    Description: CloudWatch alarm for Lambda invocation errors
+    Value: !Ref BriefFunctionErrorAlarm
+  BriefFunctionThrottleAlarmName:
+    Description: CloudWatch alarm for Lambda throttles
+    Value: !Ref BriefFunctionThrottleAlarm
+  BriefFunctionDurationAlarmName:
+    Description: CloudWatch alarm for slow Lambda responses
+    Value: !Ref BriefFunctionDurationAlarm
+  DemoDailyBudgetName:
+    Description: AWS Budget guardrail for the demo
+    Value: !Ref DemoDailyBudget
+  DashboardName:
+    Description: CloudWatch dashboard for PilarPrep backend operations
+    Value: !Ref PillarPrepDashboard
+  DashboardUrl:
+    Description: CloudWatch dashboard URL
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${PillarPrepDashboard}"

@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "types": ["node", "vite/client"],
+    "paths": { "@/*": ["./frontend/src/*"] }
+  },
+  "include": ["*.ts", "frontend/**/*.ts", "frontend/**/*.tsx", "tests/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

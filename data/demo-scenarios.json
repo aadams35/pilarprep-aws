@@ -1,0 +1,253 @@
+[
+  {
+    "id": "apex",
+    "company": "Apex Mutual",
+    "industry": "Financial Services",
+    "meetingType": "Executive Briefing",
+    "companySize": "Enterprise",
+    "pillars": [
+      "Security",
+      "Reliability",
+      "Cost Optimization"
+    ],
+    "context": "Customer is modernizing a customer portal, worried about compliance, and wants a clearer migration path without disrupting peak business periods.",
+    "decisionMakers": [
+      {
+        "name": "Lena Ortiz",
+        "title": "CIO",
+        "source": "Customer-approved profile notes",
+        "context": "Prior notes emphasize board visibility, customer trust, modernization governance, and avoiding a risky big-bang migration.",
+        "roleType": "decision-maker"
+      },
+      {
+        "name": "Marcus Reed",
+        "title": "CISO",
+        "source": "Customer-approved profile notes",
+        "context": "Security leadership has focused on audit evidence, identity boundaries, data residency, and incident readiness.",
+        "roleType": "decision-maker"
+      }
+    ],
+    "meetingNotes": "CIO wants an executive-ready modernization path. Security asked for identity boundaries, audit evidence, and a migration pilot before committing to a broader program.",
+    "feedback": [
+      "Reduce AWS jargon",
+      "Focus on security"
+    ],
+    "companyValues": "Customer trust, transparent governance, disciplined modernization, and measurable progress without avoidable service disruption.",
+    "companyValuesUrl": "https://www.apexmutual.example/about/values",
+    "additionalDirection": "Include that the portal modernization must interface with payroll and HR systems for employee benefit deductions, identity handoffs, data privacy, reconciliation, and cutover planning."
+  },
+  {
+    "id": "northstar",
+    "company": "Northstar Health",
+    "industry": "Healthcare",
+    "meetingType": "Technical Deep Dive",
+    "companySize": "Enterprise",
+    "pillars": [
+      "Security",
+      "Reliability",
+      "Operational Excellence"
+    ],
+    "context": "Hospital network is consolidating patient scheduling systems and needs stronger disaster recovery, lower support burden, and clear compliance controls.",
+    "decisionMakers": [
+      {
+        "name": "Priya Shah",
+        "title": "VP Patient Access",
+        "source": "Customer-approved profile notes",
+        "context": "Public themes center on patient access, scheduling reliability, care team efficiency, and minimizing disruption during system changes.",
+        "roleType": "decision-maker"
+      },
+      {
+        "name": "Daniel Brooks",
+        "title": "Director of Enterprise Architecture",
+        "source": "Customer-approved profile notes",
+        "context": "Architecture notes emphasize interoperability, resilient integration patterns, and reducing manual operational support.",
+        "roleType": "stakeholder",
+        "organizationalRole": "Technical evaluator",
+        "influence": "high",
+        "stance": "supportive"
+      }
+    ],
+    "meetingNotes": "Architecture team needs RTO/RPO options, data classification, and phased cutover patterns. Compliance team wants explicit evidence paths and fewer manual review steps.",
+    "feedback": [
+      "Add stronger technical depth",
+      "Improve discovery questions"
+    ],
+    "companyValues": "Patient access, continuity of care, responsible data stewardship, and simpler operations for care teams.",
+    "companyValuesUrl": "https://www.northstarhealth.example/about/values",
+    "additionalDirection": "Include integration with patient scheduling, clinical identity, and downstream notification workflows in the technical questions."
+  },
+  {
+    "id": "peakcart",
+    "company": "PeakCart Retail",
+    "industry": "Retail",
+    "meetingType": "Discovery Call",
+    "companySize": "Mid-market",
+    "pillars": [
+      "Performance Efficiency",
+      "Cost Optimization",
+      "Reliability"
+    ],
+    "context": "Digital commerce team is preparing for peak season. They need better elasticity, fewer checkout incidents, and a clearer cost story for executive sponsors.",
+    "decisionMakers": [
+      {
+        "name": "Emma Chen",
+        "title": "VP Digital",
+        "source": "Customer-approved profile notes",
+        "context": "Recent themes focus on conversion, faster campaign launches, loyalty growth, and protecting customer experience during peak traffic.",
+        "roleType": "decision-maker"
+      },
+      {
+        "name": "Luis Ramirez",
+        "title": "Platform Engineering Lead",
+        "source": "Customer-approved profile notes",
+        "context": "Engineering priorities include rollback confidence, load-test evidence, observability, and predictable cloud spend.",
+        "roleType": "stakeholder",
+        "organizationalRole": "Technical evaluator and implementation champion",
+        "influence": "high",
+        "stance": "champion"
+      }
+    ],
+    "meetingNotes": "VP of Digital cares about conversion and launch speed. Engineering wants load-test targets, rollback patterns, and cost controls before seasonal traffic ramps.",
+    "feedback": [
+      "Add cost angle",
+      "Customer is already on AWS"
+    ],
+    "companyValues": "Fast customer experiences, confident launches, sustainable growth, and disciplined spend during seasonal demand.",
+    "companyValuesUrl": "https://www.peakcart.example/company/values",
+    "additionalDirection": "Include loyalty platform integration, promotion launch timing, and checkout reconciliation as explicit business dependencies."
+  },
+  {
+    "id": "bluemesa",
+    "company": "BlueMesa Payments",
+    "industry": "Financial Services",
+    "meetingType": "Executive Briefing",
+    "companySize": "Enterprise",
+    "pillars": [
+      "Security",
+      "Reliability",
+      "Operational Excellence",
+      "Performance Efficiency",
+      "Cost Optimization",
+      "Sustainability"
+    ],
+    "companyValues": "Merchant trust, rigorous compliance, low-drama change management, and faster delivery only when customer impact stays protected.",
+    "companyValuesUrl": "https://www.bluemesa-payments.example/company/values",
+    "additionalDirection": "BlueMesa is an existing AWS customer. The engagement focuses on payroll integration across mixed API and encrypted-file interfaces, including idempotency, reconciliation, data privacy, retention, partner certification, cutover, and recovery evidence. Replacing the existing ledger is outside scope.",
+    "context": "BlueMesa Payments is a regulated payment processor serving regional banks and payroll platforms. Its production payment APIs already run on Amazon EKS, operational data is stored in Amazon RDS for PostgreSQL, payment events move through Amazon MSK, and evidence archives use Amazon S3. BlueMesa wants to add governed payroll-partner onboarding through real-time APIs and encrypted batch files without replacing its ledger. The initiative must improve partner onboarding while preserving settlement accuracy, reconciliation ownership, privileged-access evidence, and availability during payroll windows.",
+    "decisionMakers": [
+      {
+        "name": "Ariana Cole",
+        "roleType": "decision-maker",
+        "title": "Chief Digital Officer",
+        "organizationalRole": "Executive sponsor",
+        "decisionAuthority": "Executive sponsorship, strategic priority, and final program commitment",
+        "priorities": "Merchant trust, four-week partner onboarding, faster payment-product launches, and a board-ready risk narrative.",
+        "concerns": "A payroll launch that creates settlement disruption, customer-visible incidents, or another acquisition-integration delay.",
+        "successMeasures": "Two design partners onboarded through a bounded first release with measurable controls and no ledger replacement.",
+        "engagementGuidance": "Lead with partner growth and merchant trust, then connect each technical gate to customer and board confidence.",
+        "source": "Customer-approved profile notes",
+        "context": "Executive sponsor for the payroll integration program."
+      },
+      {
+        "name": "Marcus Vale",
+        "roleType": "decision-maker",
+        "title": "Chief Financial Officer",
+        "organizationalRole": "Economic buyer",
+        "decisionAuthority": "Funding envelope, commercial approval, and economic acceptance criteria",
+        "priorities": "Shorter onboarding cycles, predictable delivery cost, partner revenue readiness, and a bounded first release.",
+        "concerns": "Open-ended platform redesign, unclear unit economics, and duplicated operating costs during rollout.",
+        "successMeasures": "An approved investment range tied to onboarding lead time, support effort, and partner activation milestones.",
+        "engagementGuidance": "Use decision options, cost boundaries, and measurable operating outcomes rather than an AWS service tour.",
+        "source": "Customer-approved profile notes",
+        "context": "Economic buyer for the payroll integration program."
+      },
+      {
+        "name": "Dev Malik",
+        "roleType": "decision-maker",
+        "title": "VP Infrastructure and Resilience",
+        "organizationalRole": "Technical decision-maker",
+        "decisionAuthority": "Technical direction, reliability acceptance, and production-readiness approval",
+        "priorities": "Existing AWS architecture reuse, idempotent interfaces, failure testing, operational ownership, and recovery evidence.",
+        "concerns": "Duplicate payment instructions, brittle replay behavior, unclear MSK ownership, and unsupported recovery claims.",
+        "successMeasures": "A validated interface pattern, failure-mode evidence, named owners, and approved production-readiness gates.",
+        "engagementGuidance": "Bring current-state diagrams and testable tradeoffs.",
+        "source": "Customer-approved profile notes",
+        "context": "Technical authority for the existing AWS payment platform."
+      },
+      {
+        "name": "Rachel Kim",
+        "roleType": "decision-maker",
+        "title": "Chief Risk and Compliance Officer",
+        "organizationalRole": "Security and compliance decision-maker",
+        "decisionAuthority": "Control acceptance, retention decision, and risk exception approval",
+        "priorities": "Least privilege, data minimization, attributable privileged access, retention clarity, and audit-ready evidence.",
+        "concerns": "Raw payroll data in logs, inherited retention assumptions, broad support access, and late compliance evidence.",
+        "successMeasures": "Approved data classification and retention decisions with control evidence attached to the release gate.",
+        "engagementGuidance": "State what is known, ask for the evidence threshold, and avoid unsupported compliance claims.",
+        "source": "Customer-approved profile notes",
+        "context": "Control approver for payroll-data handling and privileged access."
+      },
+      {
+        "name": "Priya Shah",
+        "roleType": "stakeholder",
+        "title": "Director of Payment Operations",
+        "organizationalRole": "Application and operational owner",
+        "influence": "high",
+        "stance": "supportive",
+        "priorities": "Reconciliation accuracy, exception visibility, payroll cutoffs, and runbook ownership.",
+        "concerns": "Late acknowledgements, duplicate files, and exception queues without owners.",
+        "successMeasures": "Exceptions visible before the next payroll cutoff with reconciliation outcomes owned by Payment Operations.",
+        "engagementGuidance": "Validate the operating model and exception workflow before finalizing the integration design.",
+        "source": "Customer-approved profile notes",
+        "context": "Operational owner who strongly influences acceptance without final funding authority."
+      },
+      {
+        "name": "Elena Torres",
+        "roleType": "stakeholder",
+        "title": "Payroll Partnerships Lead",
+        "organizationalRole": "Internal champion and partner owner",
+        "influence": "high",
+        "stance": "champion",
+        "priorities": "Partner certification windows, consistent status models, and faster onboarding.",
+        "concerns": "Bespoke provider processes and evidence arriving after certification windows close.",
+        "successMeasures": "Two design partners complete certification with one repeatable onboarding playbook.",
+        "engagementGuidance": "Use her partner knowledge to shape interface requirements and external coordination.",
+        "source": "Customer-approved profile notes",
+        "context": "Internal champion connecting the technical program to partner commitments."
+      },
+      {
+        "name": "Noah Grant",
+        "roleType": "stakeholder",
+        "title": "Director of Strategic Procurement",
+        "organizationalRole": "Finance and procurement reviewer",
+        "influence": "medium",
+        "stance": "neutral",
+        "priorities": "Commercial clarity, vendor accountability, and predictable renewal impact.",
+        "concerns": "Unplanned tooling commitments and support boundaries that do not match contracts.",
+        "successMeasures": "Commercial dependencies and vendor responsibilities documented before pilot commitment.",
+        "engagementGuidance": "Bring a bounded dependency list before external commitments are made.",
+        "source": "Customer-approved profile notes",
+        "context": "Commercial reviewer who can delay the schedule without approving the architecture."
+      },
+      {
+        "name": "Omar Fields",
+        "roleType": "stakeholder",
+        "title": "Platform Engineering Lead",
+        "organizationalRole": "Technical evaluator and potential blocker",
+        "influence": "high",
+        "stance": "skeptical",
+        "priorities": "Low operational burden, reusable interface patterns, clear ownership, and on-call capacity.",
+        "concerns": "A rushed deadline, custom adapters, insufficient replay tooling, and another service without staffing.",
+        "successMeasures": "A supportable reference pattern with capacity, runbooks, test evidence, and explicit ownership.",
+        "engagementGuidance": "Treat objections as design constraints and involve him in the failure-mode workshop.",
+        "source": "Customer-approved profile notes",
+        "context": "High-influence technical evaluator who can block implementation readiness."
+      }
+    ],
+    "meetingNotes": "Confirmed context: BlueMesa already runs the payment platform on AWS, targets two payroll design partners and a twelve-to-four-week onboarding improvement, expects mixed API and encrypted-file interfaces, and excludes ledger replacement. Working assumptions to validate in the call: both partners prefer API-first integration, the seven-year settlement retention rule applies to payroll data, Platform Engineering has delivery capacity, and implementation funding is approved. Open discovery: exact retention, RTO/RPO, partner certification dates, and the investment gate.",
+    "feedback": [
+      "Risk and compliance: Lead with security and evidence",
+      "Question quality: Add sharper discovery questions"
+    ]
+  }
+]

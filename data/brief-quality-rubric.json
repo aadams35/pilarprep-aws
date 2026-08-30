@@ -1,0 +1,130 @@
+{
+  "minimumScore": 85,
+  "refinement": {
+    "target": "businessCase",
+    "minimumChangedPassages": 6,
+    "preservedSections": [
+      "technical",
+      "executive",
+      "stakeholders",
+      "gameplan",
+      "objections"
+    ]
+  },
+  "scenarios": {
+    "apex": {
+      "primaryPillar": "Security",
+      "requiredAnchors": [
+        "portal",
+        "audit",
+        "pilot",
+        "identity"
+      ],
+      "stakeholders": [
+        "Lena Ortiz",
+        "Marcus Reed"
+      ],
+      "businessTerms": [
+        "trust",
+        "risk",
+        "governance"
+      ],
+      "directionAnchors": [
+        "payroll",
+        "reconciliation",
+        "privacy"
+      ],
+      "meetingAnchors": [
+        "Lena Ortiz",
+        "Marcus Reed",
+        "pilot"
+      ]
+    },
+    "northstar": {
+      "primaryPillar": "Security",
+      "requiredAnchors": [
+        "patient",
+        "scheduling",
+        "recovery",
+        "compliance"
+      ],
+      "stakeholders": [
+        "Priya Shah",
+        "Daniel Brooks"
+      ],
+      "businessTerms": [
+        "continuity",
+        "access",
+        "support"
+      ],
+      "directionAnchors": [
+        "scheduling",
+        "identity",
+        "notification"
+      ],
+      "meetingAnchors": [
+        "Priya Shah",
+        "Daniel Brooks",
+        "recovery"
+      ]
+    },
+    "peakcart": {
+      "primaryPillar": "Performance Efficiency",
+      "requiredAnchors": [
+        "peak",
+        "checkout",
+        "conversion",
+        "rollback"
+      ],
+      "stakeholders": [
+        "Emma Chen",
+        "Luis Ramirez"
+      ],
+      "businessTerms": [
+        "conversion",
+        "cost",
+        "customer experience"
+      ],
+      "directionAnchors": [
+        "loyalty",
+        "promotion",
+        "reconciliation"
+      ],
+      "meetingAnchors": [
+        "Emma Chen",
+        "Luis Ramirez",
+        "load"
+      ]
+    },
+    "bluemesa": {
+      "primaryPillar": "Security",
+      "requiredAnchors": [
+        "merchant",
+        "settlement",
+        "PCI",
+        "rollback"
+      ],
+      "stakeholders": [
+        "Ariana Cole",
+        "Dev Malik",
+        "Rachel Kim"
+      ],
+      "businessTerms": [
+        "trust",
+        "continuity",
+        "risk"
+      ],
+      "directionAnchors": [
+        "payroll",
+        "reconciliation",
+        "privacy"
+      ],
+      "meetingAnchors": [
+        "Ariana Cole",
+        "Dev Malik",
+        "Rachel Kim",
+        "recovery"
+      ]
+    }
+  }
+}

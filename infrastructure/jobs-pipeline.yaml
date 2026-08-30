@@ -1,0 +1,2367 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: PilarPrep unified HTTPS and SQS AI job pipeline
+
+Parameters:
+  ResourcePrefix:
+    Type: String
+    Default: pillarprep-demo
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{2,40}$"
+  ProjectName:
+    Type: String
+    Default: PilarPrep
+  EnvironmentName:
+    Type: String
+    Default: demo
+  Owner:
+    Type: String
+    Default: austin-adams
+  CostCenter:
+    Type: String
+    Default: hackathon
+  AllowedOrigin:
+    Type: String
+    Description: HTTPS origin of your deployment, without a trailing slash.
+    AllowedPattern: "^https://.+$"
+  SecondaryAllowedOrigin:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^https://.+$"
+  ArtifactBucketName:
+    Type: String
+  ProjectStateTableName:
+    Type: String
+  DemoInvokeRoleName:
+    Type: String
+  AgentRuntimeArn:
+    Type: String
+  ScopeSecretArn:
+    Type: String
+  LambdaSdkLayerArn:
+    Type: String
+  BedrockModelId:
+    Type: String
+    Default: us.amazon.nova-pro-v1:0
+  BedrockAlternateModelId:
+    Type: String
+    Default: us.amazon.nova-micro-v1:0
+  BedrockPremiumModelId:
+    Type: String
+    Default: global.anthropic.claude-sonnet-4-6
+  BedrockFoundationModelId:
+    Type: String
+    Default: amazon.nova-pro-v1:0
+  BedrockAlternateFoundationModelId:
+    Type: String
+    Default: amazon.nova-micro-v1:0
+  BedrockPremiumFoundationModelId:
+    Type: String
+    Default: anthropic.claude-sonnet-4-6
+  BedrockGuardrailId:
+    Type: String
+    Default: ""
+  BedrockGuardrailVersion:
+    Type: String
+    Default: ""
+  DemoTenantId:
+    Type: String
+    Default: demo
+  DemoAllowedClientIds:
+    Type: String
+    Default: apex-mutual,bluemesa-payments,northstar-health,peakcart-retail,custom-demo
+  PermissionsBoundaryArn:
+    Type: String
+    Default: ""
+  LiveAiEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  GuestHourlyAiLimit:
+    Type: Number
+    Default: 12
+    MinValue: 1
+    MaxValue: 100
+    Description: Maximum AI actions per trusted guest identity per hour.
+  GuestDailyAiLimit:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 500
+  AuthUserDailyAiLimit:
+    Type: Number
+    Default: 100
+    MinValue: 1
+    MaxValue: 2000
+  AuthTenantDailyAiLimit:
+    Type: Number
+    Default: 500
+    MinValue: 1
+    MaxValue: 10000
+  ClaudeDailyAiLimit:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    MaxValue: 100
+
+  DataKmsKeyArn:
+    Type: String
+    Default: ""
+    Description: Optional customer-managed KMS key ARN for jobs, meeting evidence, queues, and state access.
+  KnowledgeBaseGeneration:
+    Type: String
+    Default: v2
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{0,15}$"
+    Description: Controlled suffix to permit safe create-before-delete Knowledge Base replacement.
+  OperationsAlertEmail:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
+    Description: Optional email endpoint for queue and worker alarms.
+  MaxReplayCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 2
+
+Conditions:
+  HasSecondaryAllowedOrigin: !Not [!Equals [!Ref SecondaryAllowedOrigin, ""]]
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, ""]]
+  HasDataKmsKey: !Not [!Equals [!Ref DataKmsKeyArn, ""]]
+  HasOperationsAlertEmail: !Not [!Equals [!Ref OperationsAlertEmail, ""]]
+  HasBedrockGuardrail: !And
+    - !Not [!Equals [!Ref BedrockGuardrailId, ""]]
+    - !Not [!Equals [!Ref BedrockGuardrailVersion, ""]]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    MemorySize: 512
+    Tracing: Active
+    PropagateTags: true
+    Environment:
+      Variables:
+        AWS_REGION_NAME: !Ref AWS::Region
+        PROJECT_TABLE: !Ref ProjectStateTableName
+        ARTIFACT_BUCKET: !Ref ArtifactBucketName
+        MEETING_EVIDENCE_BUCKET: !Ref MeetingEvidenceBucket
+        KNOWLEDGE_BASE_ID: !Ref BlueMesaKnowledgeBase
+        KNOWLEDGE_BASE_DATA_SOURCE_ID: !GetAtt BlueMesaKnowledgeBaseDataSource.DataSourceId
+        LIVE_AI_ENABLED: !Ref LiveAiEnabled
+        DEMO_TENANT_ID: !Ref DemoTenantId
+        DATA_KMS_KEY_ARN: !If
+          - HasDataKmsKey
+          - !Ref DataKmsKeyArn
+          - !Ref AWS::NoValue
+        DEMO_ALLOWED_CLIENT_IDS: !Ref DemoAllowedClientIds
+        API_ORIGIN_VERIFY_SECRET_ARN: !Ref ApiOriginVerificationSecret
+        ALLOWED_ORIGINS: !If
+          - HasSecondaryAllowedOrigin
+          - !Sub "${AllowedOrigin},${SecondaryAllowedOrigin}"
+          - !Ref AllowedOrigin
+        ALLOW_LOCAL_IDENTITY: "false"
+
+Resources:
+  WorkspaceUserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub "${ResourcePrefix}-workspace-users"
+      DeletionProtection: ACTIVE
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      MfaConfiguration: OPTIONAL
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate: [email]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          TemporaryPasswordValidityDays: 1
+      Schema:
+        - Name: tenantId
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+          StringAttributeConstraints:
+            MinLength: "1"
+            MaxLength: "64"
+        - Name: clientIds
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+          StringAttributeConstraints:
+            MinLength: "1"
+            MaxLength: "2048"
+        - Name: projectIds
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+          StringAttributeConstraints:
+            MinLength: "1"
+            MaxLength: "2048"
+      UserPoolTags:
+        Name: !Sub "${ResourcePrefix}-workspace-users"
+        Project: !Ref ProjectName
+        Application: sa-briefing-generator
+        Environment: !Ref EnvironmentName
+        Owner: !Ref Owner
+        CostCenter: !Ref CostCenter
+        ManagedBy: cloudformation
+        Repository: aadams35/pilarprep-aws
+        DataClassification: confidential
+
+  WorkspaceUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "${ResourcePrefix}-workspace-web"
+      UserPoolId: !Ref WorkspaceUserPool
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs:
+        - !Ref AllowedOrigin
+        - !If
+          - HasSecondaryAllowedOrigin
+          - !Ref SecondaryAllowedOrigin
+          - !Ref AWS::NoValue
+      LogoutURLs:
+        - !Ref AllowedOrigin
+        - !If
+          - HasSecondaryAllowedOrigin
+          - !Ref SecondaryAllowedOrigin
+          - !Ref AWS::NoValue
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 7
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+  WorkspaceUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "${ResourcePrefix}-${AWS::AccountId}"
+      UserPoolId: !Ref WorkspaceUserPool
+
+  WorkspaceOperatorGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: PilarPrepOperators
+      Description: Operators allowed to replay quarantined jobs and inspect recovery state.
+      UserPoolId: !Ref WorkspaceUserPool
+
+  WorkspacePremiumGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: PilarPrepPremium
+      Description: Authenticated users allowed to request premium final-quality model routing.
+      UserPoolId: !Ref WorkspaceUserPool
+
+  ApiOriginVerificationSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: CloudFront-to-API verification secret for PilarPrep workspace routes.
+      KmsKeyId: !If
+        - HasDataKmsKey
+        - !Ref DataKmsKeyArn
+        - !Ref AWS::NoValue
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-api-origin-verification"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: DataClassification
+          Value: confidential
+
+  JobsApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Name: !Sub "${ResourcePrefix}-jobs-api"
+      Description: !Sub "${ProjectName} ${EnvironmentName} IAM-authenticated job API"
+      PropagateTags: true
+      Auth:
+        EnableIamAuthorizer: true
+        DefaultAuthorizer: AWS_IAM
+        Authorizers:
+          WorkspaceJwtAuthorizer:
+            IdentitySource: "$request.header.Authorization"
+            JwtConfiguration:
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${WorkspaceUserPool}"
+              audience:
+                - !Ref WorkspaceUserPoolClient
+      AccessLogSettings:
+        DestinationArn: !GetAtt JobsApiAccessLogGroup.Arn
+        Format: >-
+          {"requestId":"$context.requestId","routeKey":"$context.routeKey","status":"$context.status","responseLatency":"$context.responseLatency","integrationError":"$context.integrationErrorMessage"}
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 8
+        ThrottlingRateLimit: 4
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref AllowedOrigin
+          - !If
+            - HasSecondaryAllowedOrigin
+            - !Ref SecondaryAllowedOrigin
+            - !Ref AWS::NoValue
+        AllowHeaders:
+          - accept
+          - authorization
+          - content-type
+          - x-amz-content-sha256
+          - x-amz-date
+          - x-amz-security-token
+        AllowMethods: [GET, POST, OPTIONS]
+        MaxAge: 300
+      Tags:
+        Name: !Sub "${ResourcePrefix}-jobs-api"
+        Project: !Ref ProjectName
+        Application: sa-briefing-generator
+        Environment: !Ref EnvironmentName
+        Owner: !Ref Owner
+        CostCenter: !Ref CostCenter
+        ManagedBy: cloudformation
+        Repository: aadams35/pilarprep-aws
+        DataClassification: demo
+
+  JobsApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/${ResourcePrefix}-jobs-api"
+      RetentionInDays: 14
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-jobs-api-access-logs"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+
+  MeetingEvidenceBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: !If [HasDataKmsKey, "aws:kms", AES256]
+              KMSMasterKeyID: !If
+                - HasDataKmsKey
+                - !Ref DataKmsKeyArn
+                - !Ref AWS::NoValue
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - !Ref AllowedOrigin
+              - !If
+                - HasSecondaryAllowedOrigin
+                - !Ref SecondaryAllowedOrigin
+                - !Ref AWS::NoValue
+            AllowedMethods: [POST]
+            AllowedHeaders: ["*"]
+            ExposedHeaders: [ETag]
+            MaxAge: 300
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireTemporaryTranscripts
+            Status: Enabled
+            Prefix: transcripts/
+            ExpirationInDays: 2
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 1
+          - Id: ExpireTemporaryAudioUploads
+            Status: Enabled
+            Prefix: audio/uploads/
+            ExpirationInDays: 2
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 1
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-meeting-evidence"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: DataClassification
+          Value: synthetic-demo
+
+  MeetingEvidenceBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MeetingEvidenceBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt MeetingEvidenceBucket.Arn
+              - !Sub "${MeetingEvidenceBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  GuardDutyMalwareProtectionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-meeting-audio-malware-scan-role"
+      Description: Allows GuardDuty Malware Protection to scan and tag only PilarPrep meeting uploads.
+      PermissionsBoundary: !If
+        - HasPermissionsBoundary
+        - !Ref PermissionsBoundaryArn
+        - !Ref AWS::NoValue
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: malware-protection-plan.guardduty.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${ResourcePrefix}-meeting-audio-malware-scan"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ManageOnlyGuardDutyManagedEventRule
+                Effect: Allow
+                Action:
+                  - events:PutRule
+                  - events:DeleteRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                Resource: !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*"
+                Condition:
+                  StringLike:
+                    events:ManagedBy: malware-protection-plan.guardduty.amazonaws.com
+              - Sid: InspectOnlyGuardDutyManagedEventRule
+                Effect: Allow
+                Action:
+                  - events:DescribeRule
+                  - events:ListTargetsByRule
+                Resource: !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*"
+              - Sid: TagOnlyMeetingUploads
+                Effect: Allow
+                Action:
+                  - s3:PutObjectTagging
+                  - s3:GetObjectTagging
+                  - s3:PutObjectVersionTagging
+                  - s3:GetObjectVersionTagging
+                Resource: !Sub "${MeetingEvidenceBucket.Arn}/audio/uploads/*"
+              - Sid: EnableBucketEventBridgeDelivery
+                Effect: Allow
+                Action:
+                  - s3:PutBucketNotification
+                  - s3:GetBucketNotification
+                Resource: !GetAtt MeetingEvidenceBucket.Arn
+              - Sid: WriteOnlyGuardDutyValidationObject
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "${MeetingEvidenceBucket.Arn}/malware-protection-resource-validation-object"
+              - Sid: InspectProtectedBucket
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt MeetingEvidenceBucket.Arn
+              - Sid: ScanOnlyMeetingUploads
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "${MeetingEvidenceBucket.Arn}/audio/uploads/*"
+              - !If
+                - HasDataKmsKey
+                - Sid: UseConfiguredKeyThroughS3Only
+                  Effect: Allow
+                  Action:
+                    - kms:GenerateDataKey
+                    - kms:Decrypt
+                  Resource: !Ref DataKmsKeyArn
+                  Condition:
+                    StringLike:
+                      kms:ViaService: !Sub "s3.${AWS::Region}.amazonaws.com"
+                - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-meeting-audio-malware-scan-role"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: DataClassification
+          Value: demo
+
+  MeetingAudioMalwareProtectionPlan:
+    Type: AWS::GuardDuty::MalwareProtectionPlan
+    DependsOn:
+      - MeetingEvidenceBucketPolicy
+    Properties:
+      Role: !GetAtt GuardDutyMalwareProtectionRole.Arn
+      ProtectedResource:
+        S3Bucket:
+          BucketName: !Ref MeetingEvidenceBucket
+          ObjectPrefixes:
+            - audio/uploads/
+      Actions:
+        Tagging:
+          Status: ENABLED
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-meeting-audio-malware-protection"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: DataClassification
+          Value: demo
+
+  BlueMesaVectorBucket:
+    Type: AWS::S3Vectors::VectorBucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      EncryptionConfiguration:
+        SseType: !If [HasDataKmsKey, "aws:kms", AES256]
+        KmsKeyArn: !If
+          - HasDataKmsKey
+          - !Ref DataKmsKeyArn
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: DataClassification
+          Value: synthetic-demo
+
+  BlueMesaVectorIndex:
+    Type: AWS::S3Vectors::Index
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      VectorBucketArn: !GetAtt BlueMesaVectorBucket.VectorBucketArn
+      IndexName: blue-mesa-evidence
+      DataType: float32
+      Dimension: 1024
+      DistanceMetric: cosine
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  BlueMesaKnowledgeBaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-blue-mesa-kb-role"
+      Description: Reads only approved synthetic Blue Mesa evidence and manages its S3 vector index.
+      PermissionsBoundary: !If
+        - HasPermissionsBoundary
+        - !Ref PermissionsBoundaryArn
+        - !Ref AWS::NoValue
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*"
+      Policies:
+        - PolicyName: approved-pilarprep-evidence
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: EmbedApprovedEvidence
+                Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0"
+              - Sid: ListEvidencePrefix
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt MeetingEvidenceBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - evidence/*
+              - Sid: ReadApprovedEvidence
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "${MeetingEvidenceBucket.Arn}/evidence/*"
+              - !If
+                - HasDataKmsKey
+                - Sid: UseConfiguredEvidenceKey
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:GenerateDataKey
+                    - kms:DescribeKey
+                  Resource: !Ref DataKmsKeyArn
+                - !Ref AWS::NoValue
+              - Sid: ManageOnlyBlueMesaVectorIndex
+                Effect: Allow
+                Action:
+                  - s3vectors:GetIndex
+                  - s3vectors:PutVectors
+                  - s3vectors:GetVectors
+                  - s3vectors:DeleteVectors
+                  - s3vectors:QueryVectors
+                Resource: !GetAtt BlueMesaVectorIndex.IndexArn
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: DataClassification
+          Value: synthetic-demo
+
+  BlueMesaVectorBucketPolicy:
+    Type: AWS::S3Vectors::VectorBucketPolicy
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      VectorBucketArn: !GetAtt BlueMesaVectorBucket.VectorBucketArn
+      Policy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowKnowledgeBaseOnlyOnBlueMesaIndex
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt BlueMesaKnowledgeBaseRole.Arn
+            Action:
+              - s3vectors:GetIndex
+              - s3vectors:PutVectors
+              - s3vectors:GetVectors
+              - s3vectors:DeleteVectors
+              - s3vectors:QueryVectors
+            Resource: !GetAtt BlueMesaVectorIndex.IndexArn
+
+  BlueMesaKnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    DependsOn: BlueMesaVectorBucketPolicy
+    Properties:
+      Name: !Sub "PilarPrepAuthorizedEvidence-${KnowledgeBaseGeneration}"
+      Description: Approved, metadata-scoped synthetic and tenant evidence for PilarPrep.
+      RoleArn: !GetAtt BlueMesaKnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0"
+          EmbeddingModelConfiguration:
+            BedrockEmbeddingModelConfiguration:
+              Dimensions: 1024
+              EmbeddingDataType: FLOAT32
+      StorageConfiguration:
+        Type: S3_VECTORS
+        S3VectorsConfiguration:
+          VectorBucketArn: !GetAtt BlueMesaVectorBucket.VectorBucketArn
+          IndexArn: !GetAtt BlueMesaVectorIndex.IndexArn
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref EnvironmentName
+        DataClassification: synthetic-demo
+
+  BlueMesaKnowledgeBaseDataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      KnowledgeBaseId: !Ref BlueMesaKnowledgeBase
+      Name: !Sub "PilarPrepAuthorizedEvidenceSource-${KnowledgeBaseGeneration}"
+      Description: Private approved evidence filtered by tenant, client, project, and visibility metadata.
+      DataDeletionPolicy: RETAIN
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !GetAtt MeetingEvidenceBucket.Arn
+          InclusionPrefixes:
+            - evidence/
+
+  JobDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ResourcePrefix}-ai-jobs-dlq"
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: !If
+        - HasDataKmsKey
+        - !Ref AWS::NoValue
+        - true
+      KmsMasterKeyId: !If
+        - HasDataKmsKey
+        - !Ref DataKmsKeyArn
+        - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-ai-jobs-dlq"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+
+  JobQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ResourcePrefix}-ai-jobs"
+      SqsManagedSseEnabled: !If
+        - HasDataKmsKey
+        - !Ref AWS::NoValue
+        - true
+      KmsMasterKeyId: !If
+        - HasDataKmsKey
+        - !Ref DataKmsKeyArn
+        - !Ref AWS::NoValue
+      ReceiveMessageWaitTimeSeconds: 20
+      VisibilityTimeout: 3600
+      MessageRetentionPeriod: 86400
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt JobDeadLetterQueue.Arn
+        maxReceiveCount: 3
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-ai-jobs"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+
+  TranscribeCompletionRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ResourcePrefix}-meeting-transcribe-complete"
+      Description: Resumes PilarPrep meeting jobs after Amazon Transcribe completes.
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.transcribe
+        detail-type:
+          - Transcribe Job State Change
+        detail:
+          TranscriptionJobStatus:
+            - COMPLETED
+            - FAILED
+          TranscriptionJobName:
+            - prefix: pillarprep-
+      Targets:
+        - Arn: !GetAtt JobQueue.Arn
+          Id: PilarPrepMeetingContinuation
+
+  GuardDutyScanResultRule:
+    Type: AWS::Events::Rule
+    DependsOn: MeetingAudioMalwareProtectionPlan
+    Properties:
+      Name: !Sub "${ResourcePrefix}-meeting-audio-scan-result"
+      Description: Sends PilarPrep meeting-upload malware scan results through the unified job queue.
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.guardduty
+        detail-type:
+          - GuardDuty Malware Protection Object Scan Result
+        detail:
+          resourceType:
+            - S3_OBJECT
+          s3ObjectDetails:
+            bucketName:
+              - !Ref MeetingEvidenceBucket
+            objectKey:
+              - prefix: audio/uploads/
+      Targets:
+        - Arn: !GetAtt JobQueue.Arn
+          Id: PilarPrepMeetingAudioScanResult
+
+  TranscribeCompletionQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref JobQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EventBridgeMeetingContinuation
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt JobQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt TranscribeCompletionRule.Arn
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: EventBridgeMeetingAudioScanResult
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt JobQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt GuardDutyScanResultRule.Arn
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  JobsApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ResourcePrefix}-jobs-api"
+      RetentionInDays: 14
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-jobs-api-logs"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  AiWorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ResourcePrefix}-ai-worker"
+      RetentionInDays: 14
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-ai-worker-logs"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  JobsApiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-jobs-api-role"
+      Description: Validates scoped requests, persists job pointers, and enqueues work.
+      PermissionsBoundary: !If
+        - HasPermissionsBoundary
+        - !Ref PermissionsBoundaryArn
+        - !Ref AWS::NoValue
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${ResourcePrefix}-jobs-api-data"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ManageScopedJobAndDirectoryRecords
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                  - dynamodb:TransactWriteItems
+                Resource: !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ProjectStateTableName}"
+              - Sid: ManageTransientJobObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucketName}/jobs/*"
+              - Sid: CreateOnlyMeetingAudioUploads
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "${MeetingEvidenceBucket.Arn}/audio/uploads/*"
+              - Sid: ReadScopedLatestArtifacts
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucketName}/tenants/*/clients/*/projects/*"
+              - Sid: QueueValidatedPointer
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt JobQueue.Arn
+              - Sid: OperateOnlyPilarPrepDeadLetterQueue
+                Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:ChangeMessageVisibility
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt JobDeadLetterQueue.Arn
+              - !If
+                - HasDataKmsKey
+                - Sid: UseConfiguredDataKey
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:Encrypt
+                    - kms:GenerateDataKey
+                    - kms:DescribeKey
+                  Resource: !Ref DataKmsKeyArn
+                - !Ref AWS::NoValue
+              - Sid: ReadOnlyApiOriginVerificationSecret
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref ApiOriginVerificationSecret
+
+              - Sid: ReadPilarPrepKnowledgeBaseIngestionStatus
+                Effect: Allow
+                Action: bedrock:GetIngestionJob
+                Resource: !GetAtt BlueMesaKnowledgeBase.KnowledgeBaseArn
+
+              - Sid: WriteOwnLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${JobsApiLogGroup.Arn}:*"
+              - Sid: PublishTraces
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-jobs-api-role"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+
+  AiWorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-ai-worker-role"
+      Description: Runs all Bedrock and AgentCore jobs from the durable SQS queue.
+      PermissionsBoundary: !If
+        - HasPermissionsBoundary
+        - !Ref PermissionsBoundaryArn
+        - !Ref AWS::NoValue
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${ResourcePrefix}-ai-worker-data"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ConsumeOnlyPilarPrepJobs
+                Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:ChangeMessageVisibility
+                Resource: !GetAtt JobQueue.Arn
+              - Sid: QueueAutomaticPreCallHandoff
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt JobQueue.Arn
+              - Sid: ManageSingleTableState
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                  - dynamodb:TransactWriteItems
+                Resource: !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ProjectStateTableName}"
+              - Sid: ListOnlyPilarPrepArtifacts
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucketName}"
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - jobs/*
+                      - tenants/*
+              - Sid: ManageScopedArtifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:PutObjectTagging
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucketName}/jobs/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucketName}/tenants/*"
+              - Sid: ReadTrustedPackagedSyntheticMeetingAudio
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "${MeetingEvidenceBucket.Arn}/audio/public-demo/blue-mesa-payments/*"
+              - Sid: InspectMeetingUploadScanIdentity
+                Effect: Allow
+                Action:
+                  - s3:GetObjectAttributes
+                  - s3:GetObjectTagging
+                  - s3:GetObjectVersionTagging
+                Resource: !Sub "${MeetingEvidenceBucket.Arn}/audio/uploads/*"
+              - Sid: ReadOnlyVerifiedCleanMeetingUploads
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "${MeetingEvidenceBucket.Arn}/audio/uploads/*"
+                Condition:
+                  StringEquals:
+                    s3:ExistingObjectTag/GuardDutyMalwareScanStatus: NO_THREATS_FOUND
+              - Sid: ReadWriteOnlyPrivateMeetingTranscripts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub "${MeetingEvidenceBucket.Arn}/transcripts/public-demo/blue-mesa-payments/*"
+                  - !Sub "${MeetingEvidenceBucket.Arn}/transcripts/private/*/bluemesa-payments/bluemesa-payments/blue-mesa-discovery/latest.json"
+              - Sid: ManageOnlyTenantEvidenceObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub "${MeetingEvidenceBucket.Arn}/evidence/tenants/*"
+              - Sid: SyncOnlyPilarPrepKnowledgeBase
+                Effect: Allow
+                Action:
+                  - bedrock:StartIngestionJob
+                  - bedrock:GetIngestionJob
+                  - bedrock:ListIngestionJobs
+                Resource: !GetAtt BlueMesaKnowledgeBase.KnowledgeBaseArn
+              - Sid: RetrieveOnlyPilarPrepKnowledgeBase
+                Effect: Allow
+                Action: bedrock:Retrieve
+                Resource: !GetAtt BlueMesaKnowledgeBase.KnowledgeBaseArn
+              - Sid: ReadMeetingEvidenceBucketLocation
+                Effect: Allow
+                Action: s3:GetBucketLocation
+                Resource: !GetAtt MeetingEvidenceBucket.Arn
+              - Sid: ListOnlyMeetingAudioAndTranscripts
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt MeetingEvidenceBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - audio/public-demo/blue-mesa-payments/*
+                      - audio/uploads/*
+                      - transcripts/public-demo/blue-mesa-payments/*
+                      - transcripts/private/*/bluemesa-payments/bluemesa-payments/blue-mesa-discovery/latest.json
+                      - evidence/tenants/*
+              - Sid: RunOnlyBatchTranscription
+                Effect: Allow
+                Action:
+                  - transcribe:StartTranscriptionJob
+                  - transcribe:GetTranscriptionJob
+                  - transcribe:TagResource
+                Resource: "*"
+              - Sid: DetectPiiBeforeAiProcessing
+                Effect: Allow
+                Action: comprehend:DetectPiiEntities
+                Resource: "*"
+              - Sid: InvokeConfiguredModels
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/${BedrockFoundationModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/${BedrockAlternateFoundationModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/${BedrockPremiumFoundationModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/${BedrockModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/${BedrockAlternateModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/${BedrockPremiumModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:application-inference-profile/*"
+              - !If
+                - HasBedrockGuardrail
+                - Sid: ApplyConfiguredGuardrail
+                  Effect: Allow
+                  Action: bedrock:ApplyGuardrail
+                  Resource: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:guardrail/${BedrockGuardrailId}"
+                - !Ref AWS::NoValue
+              - !If
+                - HasDataKmsKey
+                - Sid: UseConfiguredDataKey
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:Encrypt
+                    - kms:GenerateDataKey
+                    - kms:DescribeKey
+                  Resource: !Ref DataKmsKeyArn
+                - !Ref AWS::NoValue
+              - Sid: InvokeOnlyPilarPrepAgentRuntime
+                Effect: Allow
+                Action: bedrock-agentcore:InvokeAgentRuntime
+                Resource:
+                  - !Ref AgentRuntimeArn
+                  - !Sub "${AgentRuntimeArn}/runtime-endpoint/*"
+              - Sid: ReadScopeSigningSecret
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref ScopeSecretArn
+              - Sid: WriteOwnLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${AiWorkerLogGroup.Arn}:*"
+              - Sid: PublishTraces
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                  - xray:GetSamplingStatisticSummaries
+                Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-ai-worker-role"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Repository
+          Value: aadams35/pilarprep-aws
+        - Key: DataClassification
+          Value: demo
+
+  JobsApiFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: JobsApiLogGroup
+    Properties:
+      FunctionName: !Sub "${ResourcePrefix}-jobs-api"
+      Description: Validates, scopes, queues, polls, lists, and downloads PilarPrep jobs.
+      CodeUri: ../backend
+      Handler: jobs_api.handler.handler
+      Role: !GetAtt JobsApiRole.Arn
+      Layers: [!Ref LambdaSdkLayerArn]
+      Timeout: 15
+      Environment:
+        Variables:
+          JOB_QUEUE_URL: !Ref JobQueue
+          JOB_TTL_SECONDS: "3600"
+          MAX_RECEIVE_COUNT: "3"
+          GUEST_HOURLY_AI_LIMIT: !Ref GuestHourlyAiLimit
+          GUEST_DAILY_AI_LIMIT: !Ref GuestDailyAiLimit
+          AUTH_USER_DAILY_AI_LIMIT: !Ref AuthUserDailyAiLimit
+          JOB_DLQ_URL: !Ref JobDeadLetterQueue
+          MAX_REPLAY_COUNT: !Ref MaxReplayCount
+          MAX_TOTAL_ATTEMPTS: "6"
+          AUTH_TENANT_DAILY_AI_LIMIT: !Ref AuthTenantDailyAiLimit
+          CLAUDE_DAILY_AI_LIMIT: !Ref ClaudeDailyAiLimit
+          GENERATION_ENABLED: !Ref LiveAiEnabled
+          GUEST_ALLOWED_MODELS: nova-micro,nova-pro
+          AUTH_ALLOWED_MODELS: nova-micro,nova-pro,claude-sonnet-4.6
+      Tags:
+        Name: !Sub "${ResourcePrefix}-jobs-api"
+        Project: !Ref ProjectName
+        Application: sa-briefing-generator
+        Environment: !Ref EnvironmentName
+        Owner: !Ref Owner
+        CostCenter: !Ref CostCenter
+        ManagedBy: cloudformation
+        Repository: aadams35/pilarprep-aws
+        DataClassification: demo
+      Events:
+        CreateJob:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /jobs
+            Method: POST
+        GetJob:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /jobs/{jobId}
+            Method: GET
+        ListClients:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /clients
+            Method: GET
+        GetLatestClientPacket:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /clients/{clientId}/latest
+            Method: GET
+        GetArtifact:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /artifacts/{artifactType}
+            Method: GET
+        WorkspaceCreateMeetingAudioUpload:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /workspace/meeting-audio/uploads
+            Method: POST
+            Auth:
+              Authorizer: WorkspaceJwtAuthorizer
+        WorkspaceGetMeetingAudioUpload:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /workspace/meeting-audio/uploads/{uploadId}
+            Method: GET
+            Auth:
+              Authorizer: WorkspaceJwtAuthorizer
+        WorkspaceGetDemoMeetingAudio:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /workspace/meeting-audio/demo
+            Method: GET
+            Auth:
+              Authorizer: WorkspaceJwtAuthorizer
+        WorkspaceCreateJob:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /workspace/jobs
+            Method: POST
+            Auth:
+              Authorizer: WorkspaceJwtAuthorizer
+        WorkspaceGetJob:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /workspace/jobs/{jobId}
+            Method: GET
+            Auth:
+              Authorizer: WorkspaceJwtAuthorizer
+        WorkspaceListClients:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /workspace/clients
+            Method: GET
+            Auth:
+              Authorizer: WorkspaceJwtAuthorizer
+        WorkspaceGetLatestClientPacket:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /workspace/clients/{clientId}/latest
+            Method: GET
+            Auth:
+              Authorizer: WorkspaceJwtAuthorizer
+        WorkspaceGetArtifact:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /workspace/artifacts/{artifactType}
+            Method: GET
+            Auth:
+              Authorizer: WorkspaceJwtAuthorizer
+
+        WorkspaceListEvidence:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /workspace/evidence
+            Method: GET
+            Auth:
+              Authorizer: WorkspaceJwtAuthorizer
+
+        WorkspaceReplayDlq:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /workspace/operations/dlq/replay
+            Method: POST
+            Auth:
+              Authorizer: WorkspaceJwtAuthorizer
+
+  AiWorkerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: AiWorkerLogGroup
+    Properties:
+      FunctionName: !Sub "${ResourcePrefix}-ai-worker"
+      Description: Unified Bedrock and AgentCore worker consuming pointer-only SQS jobs.
+      CodeUri: ../backend
+      Handler: ai_worker.handler.handler
+      Role: !GetAtt AiWorkerRole.Arn
+      Layers: [!Ref LambdaSdkLayerArn]
+      Timeout: 600
+      MemorySize: 1024
+      Environment:
+        Variables:
+          AGENT_RUNTIME_ARN: !Ref AgentRuntimeArn
+          JOB_QUEUE_URL: !Ref JobQueue
+          SCOPE_SECRET_ARN: !Ref ScopeSecretArn
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          BEDROCK_PREMIUM_MODEL_ID: !Ref BedrockPremiumModelId
+          BEDROCK_ALLOWED_MODEL_IDS: !Sub "${BedrockModelId},${BedrockAlternateModelId},${BedrockPremiumModelId}"
+          BEDROCK_GUARDRAIL_ID: !If
+            - HasBedrockGuardrail
+            - !Ref BedrockGuardrailId
+            - !Ref AWS::NoValue
+          BEDROCK_GUARDRAIL_VERSION: !If
+            - HasBedrockGuardrail
+            - !Ref BedrockGuardrailVersion
+            - !Ref AWS::NoValue
+          WORKER_TIMEOUT_SECONDS: "600"
+          AGENT_RUNTIME_READ_TIMEOUT_SECONDS: "300"
+          MAX_RECEIVE_COUNT: "3"
+          RETRY_VISIBILITY_SECONDS: "5"
+          CONTENT_SAFETY_ENABLED: "true"
+          PII_SCREENING_ENABLED: "true"
+          EXPECTED_AWS_ACCOUNT_ID: !Ref AWS::AccountId
+          BRIEF_PROMPT_VERSION: "2026-08-21.1"
+          AGENT_PROMPT_VERSION: "2026-08-21.1"
+      Tags:
+        Name: !Sub "${ResourcePrefix}-ai-worker"
+        Project: !Ref ProjectName
+        Application: sa-briefing-generator
+        Environment: !Ref EnvironmentName
+        Owner: !Ref Owner
+        CostCenter: !Ref CostCenter
+        ManagedBy: cloudformation
+        Repository: aadams35/pilarprep-aws
+        DataClassification: demo
+      Events:
+        JobQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt JobQueue.Arn
+            BatchSize: 1
+            MaximumBatchingWindowInSeconds: 0
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+            ScalingConfig:
+              MaximumConcurrency: 2
+
+  DemoJobsApiInvokePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${ResourcePrefix}-invoke-jobs-api"
+      Roles: [!Ref DemoInvokeRoleName]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: InvokeOnlyPilarPrepJobsApi
+            Effect: Allow
+            Action: execute-api:Invoke
+            Resource:
+              - !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${JobsApi}/*/POST/jobs"
+              - !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${JobsApi}/*/GET/jobs/*"
+              - !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${JobsApi}/*/GET/clients"
+              - !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${JobsApi}/*/GET/clients/*/latest"
+              - !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${JobsApi}/*/GET/artifacts/*"
+
+  OperationsAlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ResourcePrefix}-operations-alerts"
+      DisplayName: PilarPrep operations
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-operations-alerts"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  OperationsAlertSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasOperationsAlertEmail
+    Properties:
+      TopicArn: !Ref OperationsAlertTopic
+      Protocol: email
+      Endpoint: !Ref OperationsAlertEmail
+
+  OperationsAlertTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref OperationsAlertTopic]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudWatchAlarms
+            Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref OperationsAlertTopic
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  JobsApiThrottleMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref JobsApiAccessLogGroup
+      FilterPattern: '{ $.status = "429" }'
+      MetricTransformations:
+        - MetricNamespace: PilarPrep
+          MetricName: JobsApiThrottledRequests
+          MetricValue: "1"
+          DefaultValue: 0
+          Unit: Count
+
+  JobsApiErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-jobs-api-errors"
+      AlarmDescription: Jobs API Lambda returned an unhandled error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref JobsApiFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-jobs-api-errors"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  JobsApiThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-jobs-api-throttled"
+      AlarmDescription: Jobs API returned five or more throttling responses in five minutes.
+      Namespace: PilarPrep
+      MetricName: JobsApiThrottledRequests
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-jobs-api-throttled"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  UnauthorizedRequestAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-unauthorized-requests"
+      AlarmDescription: Repeated rejected authorization or edge-bypass attempts.
+      Namespace: PilarPrep
+      MetricName: UnauthorizedRequests
+      Dimensions:
+        - Name: Service
+          Value: JobsPipeline
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-unauthorized-requests"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  CrossScopeAttemptAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-cross-scope-attempts"
+      AlarmDescription: A browser identity attempted to access another authorized scope.
+      Namespace: PilarPrep
+      MetricName: CrossScopeAuthorizationAttempts
+      Dimensions:
+        - Name: Service
+          Value: JobsPipeline
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-cross-scope-attempts"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  UsageQuotaAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-quota-exhaustion"
+      AlarmDescription: Five or more server-controlled AI quota rejections occurred in five minutes.
+      Namespace: PilarPrep
+      MetricName: UsageQuotaExceeded
+      Dimensions:
+        - Name: Service
+          Value: JobsPipeline
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-quota-exhaustion"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  JobQueueDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-ai-jobs-queue-depth"
+      AlarmDescription: The durable AI queue remained above five visible jobs for two minutes.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt JobQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-ai-jobs-queue-depth"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  TerminalJobFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-terminal-job-failures"
+      AlarmDescription: An AI job reached a terminal failure state.
+      Namespace: PilarPrep
+      MetricName: JobsFailed
+      Dimensions:
+        - Name: Service
+          Value: JobsPipeline
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-terminal-job-failures"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  RagIngestionFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-rag-ingestion-status-failures"
+      AlarmDescription: PilarPrep could not read an active Knowledge Base ingestion status.
+      Namespace: PilarPrep
+      MetricName: RagIngestionStatusFailures
+      Dimensions:
+        - Name: Service
+          Value: JobsPipeline
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-rag-ingestion-status-failures"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  AiWorkerDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-ai-worker-duration"
+      AlarmDescription: Unified worker duration approached its ten-minute timeout.
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AiWorkerFunction
+      ExtendedStatistic: p95
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 480000
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-ai-worker-duration"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  BedrockFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-bedrock-failures"
+      AlarmDescription: A brief-generation Bedrock or validation call failed.
+      Namespace: PilarPrep
+      MetricName: BriefErrors
+      Dimensions:
+        - Name: Service
+          Value: BriefFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-bedrock-failures"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  BedrockLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-bedrock-latency"
+      AlarmDescription: Bedrock brief-generation p95 latency exceeded two minutes.
+      Namespace: PilarPrep
+      MetricName: BriefModelLatencyMs
+      Dimensions:
+        - Name: Service
+          Value: BriefFunction
+      ExtendedStatistic: p95
+      Period: 300
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 120000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-bedrock-latency"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  GuardrailInterventionAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-guardrail-interventions"
+      AlarmDescription: The configured Bedrock Guardrail intervened during generation.
+      Namespace: PilarPrep
+      MetricName: GuardrailInterventions
+      Dimensions:
+        - Name: Service
+          Value: BriefFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-guardrail-interventions"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  MeetingAudioSecurityOutcomeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-meeting-audio-security-outcomes"
+      AlarmDescription: A meeting upload was blocked, skipped, or failed malware scanning.
+      Metrics:
+        - Id: blocked
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: PilarPrep
+              MetricName: GuardDutyBlockedScans
+              Dimensions:
+                - Name: Service
+                  Value: JobsPipeline
+            Period: 300
+            Stat: Sum
+        - Id: skipped
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: PilarPrep
+              MetricName: GuardDutySkippedScans
+              Dimensions:
+                - Name: Service
+                  Value: JobsPipeline
+            Period: 300
+            Stat: Sum
+        - Id: failed
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: PilarPrep
+              MetricName: GuardDutyFailedScans
+              Dimensions:
+                - Name: Service
+                  Value: JobsPipeline
+            Period: 300
+            Stat: Sum
+        - Id: total
+          Expression: blocked + skipped + failed
+          Label: Abnormal meeting-audio scan outcomes
+          ReturnData: true
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-meeting-audio-security-outcomes"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  AiContentSafetyInterventionAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-ai-content-safety-interventions"
+      AlarmDescription: PII or Bedrock Guardrail controls blocked an AI request or response.
+      Metrics:
+        - Id: pii
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: PilarPrep
+              MetricName: PiiBlockedRequests
+              Dimensions:
+                - Name: Service
+                  Value: JobsPipeline
+            Period: 300
+            Stat: Sum
+        - Id: inputguard
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: PilarPrep
+              MetricName: InputGuardrailInterventions
+              Dimensions:
+                - Name: Service
+                  Value: JobsPipeline
+            Period: 300
+            Stat: Sum
+        - Id: outputguard
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: PilarPrep
+              MetricName: OutputGuardrailInterventions
+              Dimensions:
+                - Name: Service
+                  Value: JobsPipeline
+            Period: 300
+            Stat: Sum
+        - Id: total
+          Expression: pii + inputguard + outputguard
+          Label: AI content-safety interventions
+          ReturnData: true
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-ai-content-safety-interventions"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  AgentCoreFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-agentcore-failures"
+      AlarmDescription: An active handoff or catch-up AgentCore invocation failed.
+      Namespace: PilarPrep
+      MetricName: AgentCoreFailures
+      Dimensions:
+        - Name: Service
+          Value: JobsPipeline
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-agentcore-failures"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  AgentCoreFallbackAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-agentcore-fallbacks"
+      AlarmDescription: An active AgentCore result reported unexpected fallback behavior.
+      Namespace: PilarPrep
+      MetricName: AgentCoreFallbacks
+      Dimensions:
+        - Name: Service
+          Value: JobsPipeline
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-agentcore-fallbacks"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  RagRetrievalFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-rag-retrieval-failures"
+      AlarmDescription: AgentCore could not retrieve authorized Knowledge Base evidence.
+      Namespace: PilarPrep
+      MetricName: RagRetrievalFailures
+      Dimensions:
+        - Name: Service
+          Value: AgentCore
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-rag-retrieval-failures"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  RagCrossScopeAttemptAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-rag-cross-scope-attempts"
+      AlarmDescription: Knowledge Base retrieval returned evidence outside the authorized metadata scope.
+      Namespace: PilarPrep
+      MetricName: RagCrossScopeAttempts
+      Dimensions:
+        - Name: Service
+          Value: AgentCore
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-rag-cross-scope-attempts"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  EstimatedSpendAnomalyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-estimated-model-spend"
+      AlarmDescription: Estimated Bedrock inference spend exceeded one dollar in one day.
+      Namespace: PilarPrep
+      MetricName: BriefEstimatedCostUsd
+      Dimensions:
+        - Name: Service
+          Value: BriefFunction
+      Statistic: Sum
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-estimated-model-spend"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  JobDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-ai-jobs-dlq-visible"
+      AlarmDescription: PilarPrep AI jobs exhausted all retries.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt JobDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-ai-jobs-dlq-visible"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  JobAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-ai-jobs-oldest-age"
+      AlarmDescription: PilarPrep AI job queue has work older than five minutes.
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt JobQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 300
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-ai-jobs-oldest-age"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  AiWorkerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-ai-worker-errors"
+      AlarmDescription: Unified PilarPrep AI worker errors.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AiWorkerFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-ai-worker-errors"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  JobsDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${ResourcePrefix}-jobs-pipeline"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Durable AI queue",
+                "region": "${AWS::Region}",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  ["AWS/SQS", "NumberOfMessagesSent", "QueueName", "${JobQueue.QueueName}", {"label": "Queued"}],
+                  [".", "NumberOfMessagesDeleted", ".", ".", {"label": "Completed"}],
+                  [".", "ApproximateNumberOfMessagesVisible", "QueueName", "${JobDeadLetterQueue.QueueName}", {"label": "DLQ"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "API and worker health",
+                "region": "${AWS::Region}",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${JobsApiFunction}", {"label": "API requests"}],
+                  [".", "Errors", ".", ".", {"label": "API errors"}],
+                  [".", "Invocations", ".", "${AiWorkerFunction}", {"label": "Worker jobs"}],
+                  [".", "Errors", ".", ".", {"label": "Worker errors"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "Identity, edge and quota controls",
+                "region": "${AWS::Region}",
+                "view": "singleValue",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  ["PilarPrep", "UnauthorizedRequests", "Service", "JobsPipeline", {"label": "Unauthorized"}],
+                  [".", "CrossScopeAuthorizationAttempts", ".", ".", {"label": "Cross-scope"}],
+                  [".", "UsageQuotaExceeded", ".", ".", {"label": "Quota rejected"}],
+                  ["PilarPrep", "JobsApiThrottledRequests", {"label": "API throttled"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8,
+              "y": 6,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "End-to-end latency p95",
+                "region": "${AWS::Region}",
+                "view": "singleValue",
+                "stat": "p95",
+                "period": 300,
+                "metrics": [
+                  ["PilarPrep", "JobTotalLatencyMs", "Service", "JobsPipeline", {"label": "Total job"}],
+                  [".", "JobQueueWaitMs", ".", ".", {"label": "Queue wait"}],
+                  [".", "AgentCoreLatencyMs", ".", ".", {"label": "AgentCore"}],
+                  ["PilarPrep", "BriefModelLatencyMs", "Service", "BriefFunction", {"label": "Bedrock"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16,
+              "y": 6,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "Model quality and estimated spend",
+                "region": "${AWS::Region}",
+                "view": "singleValue",
+                "stat": "Sum",
+                "period": 86400,
+                "metrics": [
+                  ["PilarPrep", "BriefEstimatedCostUsd", "Service", "BriefFunction", {"label": "Estimated USD"}],
+                  [".", "BriefErrors", ".", ".", {"label": "Generation failures"}],
+                  [".", "GuardrailInterventions", ".", ".", {"label": "Guardrail interventions"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 12,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "AgentCore and authorized RAG",
+                "region": "${AWS::Region}",
+                "view": "singleValue",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  ["PilarPrep", "AgentCoreFailures", "Service", "JobsPipeline", {"label": "Agent failures"}],
+                  [".", "AgentCoreFallbacks", ".", ".", {"label": "Unexpected fallbacks"}],
+                  [".", "RagIngestionStatusFailures", ".", ".", {"label": "Ingestion status failures"}],
+                  ["PilarPrep", "RagRetrievalFailures", "Service", "AgentCore", {"label": "Retrieval failures"}],
+                  [".", "RagCrossScopeAttempts", ".", ".", {"label": "Rejected RAG scope"}]
+                ]
+              }
+            },
+            {
+              "type": "log",
+              "x": 12,
+              "y": 12,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Recent safe job outcomes",
+                "region": "${AWS::Region}",
+                "query": "SOURCE '${AiWorkerLogGroup}' | fields @timestamp, event, traceId, jobId, tenantHash, action, model, queueWaitMs, modelLatencyMs, totalLatencyMs, retryCount, finalStatus, errorType | sort @timestamp desc | limit 50",
+                "view": "table"
+              }
+            }
+          ]
+        }
+
+Outputs:
+  JobsApiUrl:
+    Description: HTTPS base URL for the unified IAM-authenticated Jobs API.
+    Value: !Sub "https://${JobsApi}.execute-api.${AWS::Region}.amazonaws.com"
+  WorkspaceUserPoolId:
+    Value: !Ref WorkspaceUserPool
+  WorkspaceUserPoolClientId:
+    Value: !Ref WorkspaceUserPoolClient
+  WorkspaceLoginDomain:
+    Description: Cognito managed-login domain for verified-email workspace users.
+    Value: !Sub "https://${WorkspaceUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com"
+  WorkspaceJwtIssuer:
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${WorkspaceUserPool}"
+
+  JobsApiId:
+    Value: !Ref JobsApi
+  JobsApiFunctionName:
+    Value: !Ref JobsApiFunction
+  AiWorkerFunctionName:
+    Value: !Ref AiWorkerFunction
+  AiWorkerRoleArn:
+    Description: Role authorized to invoke the PilarPrep AgentCore Runtime.
+    Value: !GetAtt AiWorkerRole.Arn
+  ApiOriginVerificationSecretArn:
+    Description: Secret ARN used by CloudFront and the Jobs API for origin verification.
+    Value: !Ref ApiOriginVerificationSecret
+  JobQueueUrl:
+    Value: !Ref JobQueue
+  JobQueueArn:
+    Value: !GetAtt JobQueue.Arn
+  JobDeadLetterQueueUrl:
+    Value: !Ref JobDeadLetterQueue
+  JobsDashboardName:
+    Value: !Ref JobsDashboard
+  OperationsAlertTopicArn:
+    Description: SNS topic receiving actionable PilarPrep queue and worker alarms.
+    Value: !Ref OperationsAlertTopic
+  MeetingEvidenceBucketName:
+    Description: Private bucket for malware-scanned audio, expiring full transcripts, and approved RAG evidence.
+    Value: !Ref MeetingEvidenceBucket
+  MeetingAudioMalwareProtectionPlanId:
+    Description: GuardDuty Malware Protection plan scoped to the meeting upload quarantine prefix.
+    Value: !GetAtt MeetingAudioMalwareProtectionPlan.MalwareProtectionPlanId
+  MeetingAudioMalwareProtectionPlanStatus:
+    Description: Current GuardDuty Malware Protection plan status.
+    Value: !GetAtt MeetingAudioMalwareProtectionPlan.Status
+  GuardDutyScanResultRuleArn:
+    Description: EventBridge Event 1 rule delivering meeting-audio scan results to the unified queue.
+    Value: !GetAtt GuardDutyScanResultRule.Arn
+  BlueMesaKnowledgeBaseId:
+    Description: Bedrock Knowledge Base ID for approved Blue Mesa evidence.
+    Value: !Ref BlueMesaKnowledgeBase
+  BlueMesaKnowledgeBaseArn:
+    Value: !GetAtt BlueMesaKnowledgeBase.KnowledgeBaseArn
+  BlueMesaKnowledgeBaseDataSourceId:
+    Description: Bedrock Knowledge Base S3 data source ID.
+    Value: !GetAtt BlueMesaKnowledgeBaseDataSource.DataSourceId
+  BlueMesaVectorBucketArn:
+    Value: !GetAtt BlueMesaVectorBucket.VectorBucketArn
+  BlueMesaVectorIndexArn:
+    Value: !GetAtt BlueMesaVectorIndex.IndexArn
+
+  KnowledgeBaseId:
+    Description: Shared PilarPrep Knowledge Base ID for metadata-scoped evidence.
+    Value: !Ref BlueMesaKnowledgeBase
+  KnowledgeBaseArn:
+    Description: Shared PilarPrep Knowledge Base ARN.
+    Value: !GetAtt BlueMesaKnowledgeBase.KnowledgeBaseArn
+  KnowledgeBaseDataSourceId:
+    Description: Shared PilarPrep S3 data source ID.
+    Value: !GetAtt BlueMesaKnowledgeBaseDataSource.DataSourceId

@@ -1,0 +1,64 @@
+{
+  "action": "create_handoff",
+  "clientId": "bluemesa-payments",
+  "projectId": "bluemesa-payments",
+  "sessionId": "session-bluemesa-hackathon-demo-000001",
+  "audienceRole": "PM",
+  "focus": "Create the first two-week plan.",
+  "meetingNotes": "BlueMesa approved a discovery-to-pilot path. Dev Malik owns resilience evidence, Rachel Kim owns PCI and identity controls, and Ariana Cole will sponsor a holiday-readiness checkpoint. The first wave must prove overnight settlement recovery and rollback before customer traffic moves.",
+  "modelPreference": "nova-pro",
+  "confirmWrite": true,
+  "idempotencyKey": "handoff-bluemesa-demo-000001",
+  "approvedBrief": {
+    "businessCase": {
+      "scenario": "BlueMesa is consolidating acquired payment systems before holiday volume while protecting merchant settlement continuity and PCI evidence.",
+      "desiredOutcomes": "Agree on a low-disruption validation path, named evidence owners, and a bounded pilot decision.",
+      "alignmentStatement": "Confirm that the meeting should align on merchant-trust outcomes, validate the highest-risk assumptions, and leave with named owners and a clear pilot gate.",
+      "inScope": "Settlement recovery, identity boundaries, PCI evidence, rollback criteria, owners, and the bounded pilot decision.",
+      "outOfScope": "A production cutover, guaranteed implementation dates, compliance certification, and broad migration approval.",
+      "successCriteria": "BlueMesa corrects assumptions, accepts the evidence plan, names owners, defines pilot thresholds, and schedules the decision session."
+    },
+    "technical": ["Validate settlement dependencies, identity boundaries, recovery evidence, and rollback before migration."],
+    "executive": ["Protect merchant trust while creating a controlled path to faster delivery."],
+    "stakeholders": ["Ariana sponsors outcomes, Dev owns resilience, and Rachel owns compliance evidence."],
+    "gameplan": ["Agree on a bounded pilot with explicit go, no-go, and rollback criteria."],
+    "objections": ["Modernization cannot create a public incident during peak season."],
+    "citations": ["Customer-approved BlueMesa scenario"],
+    "evidence": [
+      {
+        "section": "technical",
+        "itemIndex": 0,
+        "sources": ["Customer-approved BlueMesa scenario"]
+      }
+    ]
+  },
+  "briefRequest": {
+    "mode": "project",
+    "modelPreference": "nova-pro",
+    "company": "BlueMesa Payments",
+    "industry": "Financial Services",
+    "meetingType": "Executive Briefing",
+    "companySize": "Enterprise",
+    "pillars": ["Security", "Reliability", "Operational Excellence"],
+    "pillarRanking": [
+      {"rank": 1, "pillar": "Security"},
+      {"rank": 2, "pillar": "Reliability"},
+      {"rank": 3, "pillar": "Operational Excellence"}
+    ],
+    "context": "BlueMesa is consolidating merchant dispute processing and customer reporting after two acquisitions while preparing for holiday transaction volume.",
+    "companyValues": "Merchant trust, rigorous compliance, low-drama change management, and faster delivery only when customer impact stays protected.",
+    "companyValuesUrl": "https://www.bluemesa-payments.example/company/values",
+    "meetingNotes": "BlueMesa approved a discovery-to-pilot path with named resilience and compliance owners.",
+    "role": "PM",
+    "prompt": "Create the first two-week plan."
+  },
+  "scope": {
+    "tenantId": "demo",
+    "clientId": "bluemesa-payments",
+    "projectId": "bluemesa-payments",
+    "userId": "user-bluemesa-demo-000001",
+    "sessionId": "session-bluemesa-hackathon-demo-000001"
+  },
+  "scopeToken": "local-mock-scope-token-not-sent-to-aws",
+  "traceId": "trace-bluemesa-handoff-demo-000001"
+}

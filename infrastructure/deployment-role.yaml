@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Temporary deployment identities for the PilarPrep AWS hackathon environment.
+
+Parameters:
+  RoleName:
+    Type: String
+    Default: PilarPrepHackathonDeployer
+    AllowedPattern: "^[A-Za-z0-9+=,.@_-]{1,64}$"
+  BootstrapUserName:
+    Type: String
+    Default: PilarPrepDeploymentBootstrap
+    AllowedPattern: "^[A-Za-z0-9+=,.@_-]{1,64}$"
+
+Resources:
+  PilarPrepDeploymentBootstrapUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Ref BootstrapUserName
+      Tags:
+        - Key: Name
+          Value: PilarPrepDeploymentBootstrap
+        - Key: Project
+          Value: PilarPrep
+        - Key: Environment
+          Value: demo
+        - Key: Purpose
+          Value: temporary-role-bootstrap
+        - Key: ManagedBy
+          Value: cloudformation
+
+  PilarPrepDeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Description: Temporary administrator role used only to deploy and remove PilarPrep hackathon resources.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: BootstrapUserOnly
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt PilarPrepDeploymentBootstrapUser.Arn
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AdministratorAccess"
+      Tags:
+        - Key: Name
+          Value: PilarPrepHackathonDeployer
+        - Key: Project
+          Value: PilarPrep
+        - Key: Environment
+          Value: demo
+        - Key: Purpose
+          Value: temporary-hackathon-deployment
+        - Key: ManagedBy
+          Value: cloudformation
+
+  PilarPrepDeploymentBootstrapPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: PilarPrepAssumeDeploymentRole
+      Users:
+        - !Ref PilarPrepDeploymentBootstrapUser
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AssumeOnlyPilarPrepDeploymentRole
+            Effect: Allow
+            Action: sts:AssumeRole
+            Resource: !GetAtt PilarPrepDeploymentRole.Arn
+
+Outputs:
+  DeploymentRoleArn:
+    Description: Role ARN for the pillarprep-deployer AWS CLI profile.
+    Value: !GetAtt PilarPrepDeploymentRole.Arn
+  BootstrapUserName:
+    Description: IAM user used only as the source identity for the deployment role.
+    Value: !Ref PilarPrepDeploymentBootstrapUser

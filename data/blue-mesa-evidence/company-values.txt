@@ -1,0 +1,15 @@
+Blue Mesa Payments Company Values
+
+This is synthetic public-demo evidence created for PilarPrep. It does not describe a real company.
+
+Merchant trust
+
+Blue Mesa treats dependable settlement, transparent dispute handling, and protection of payment and payroll data as promises to merchants. Customer-facing commitments must be supported by measurable controls and clear incident ownership.
+
+Controlled change
+
+The company prefers phased delivery with explicit decision gates, rollback plans, and evidence that each release is operationally ready. Speed matters, but releases must not trade away auditability or merchant continuity.
+
+Accountability, evidence, and partner empathy
+
+Every material requirement, risk, decision, and action needs a named owner and review date. Security, reliability, and compliance claims require artifacts, test results, runbooks, and measurable controls. Integrations should reduce manual reconciliation and surprise for merchants, payroll partners, and internal support teams while preserving clear system boundaries.
