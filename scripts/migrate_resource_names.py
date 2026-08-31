@@ -42,7 +42,7 @@ NEW_PARAMETERS = {
 }
 NEW_CONDITIONS = {
     "core": ["HasArtifactBucketName"],
-    "jobs": ["HasMeetingEvidenceBucketName", "HasEvidenceVectorBucketName"],
+    "jobs": ["HasMeetingEvidenceBucketName", "UsesGeneratedMeetingBucket", "HasEvidenceVectorBucketName"],
     "frontend": ["HasCloudFrontName"],
     "agent": [],
 }
@@ -135,6 +135,7 @@ def naming_template(kind, live):
             "AWS::S3::Bucket", "AWS::S3::BucketPolicy", "AWS::S3Vectors::VectorBucket",
             "AWS::S3Vectors::Index", "AWS::S3Vectors::VectorBucketPolicy",
             "AWS::Bedrock::KnowledgeBase", "AWS::Bedrock::DataSource",
+            "AWS::GuardDuty::MalwareProtectionPlan",
         }:
             resource["DeletionPolicy"] = "Retain"
             resource["UpdateReplacePolicy"] = "Retain"
@@ -147,6 +148,55 @@ def naming_template(kind, live):
         if resource["Type"] == "AWS::CloudFront::Distribution":
             resource["Properties"]["DistributionConfig"]["Comment"] = local_resource["Properties"]["DistributionConfig"]["Comment"]
             resource["Properties"]["Tags"] = local_resource["Properties"]["Tags"]
+    return result
+
+
+def named_audio_protection(template):
+    """A protection plan cannot move between buckets through the GuardDuty update API."""
+    result = copy.deepcopy(template)
+    local = load_template((ROOT / "infrastructure" / FILES["jobs"]).read_text(encoding="utf-8-sig"))
+    old = result["Resources"]["MeetingAudioMalwareProtectionPlan"]
+    if old.get("DeletionPolicy") != "Retain":
+        raise RuntimeError("Retain the original audio protection plan before creating its replacement.")
+    old["Condition"] = "UsesGeneratedMeetingBucket"
+    result["Resources"]["NamedMeetingAudioMalwareProtectionPlan"] = local["Resources"]["NamedMeetingAudioMalwareProtectionPlan"]
+    result["Resources"]["GuardDutyScanResultRule"].pop("DependsOn", None)
+    for key in ("MeetingAudioMalwareProtectionPlanId", "MeetingAudioMalwareProtectionPlanStatus"):
+        result["Outputs"][key] = local["Outputs"][key]
+    return result
+
+
+def bucket_imports(logical, bucket, existing_resources):
+    resources = [
+        {"ResourceType": "AWS::S3::Bucket", "LogicalResourceId": logical,
+         "ResourceIdentifier": {"BucketName": bucket}},
+        {"ResourceType": "AWS::S3::BucketPolicy", "LogicalResourceId": logical + "Policy",
+         "ResourceIdentifier": {"Bucket": bucket}},
+    ]
+    return [item for item in resources if item["LogicalResourceId"] not in existing_resources]
+
+
+def detach_storage(template, logical, bucket, region):
+    result = copy.deepcopy(template)
+    removed = {logical, logical + "Policy"}
+    for key in removed:
+        del result["Resources"][key]
+    for resource in result["Resources"].values():
+        depends = resource.get("DependsOn", [])
+        dependencies = [depends] if isinstance(depends, str) else depends
+        retained = [item for item in dependencies if item not in removed]
+        if retained:
+            resource["DependsOn"] = retained
+        else:
+            resource.pop("DependsOn", None)
+    return literal_bucket_references(result, logical, bucket, region)
+
+
+def storage_import_template(live, final, imports):
+    result = copy.deepcopy(live)
+    for item in imports:
+        key = item["LogicalResourceId"]
+        result["Resources"][key] = copy.deepcopy(final["Resources"][key])
     return result
 
 
@@ -398,7 +448,8 @@ class Migration:
         if len(body.encode()) <= 51200:
             request["TemplateBody"] = body
         else:
-            bucket = self.state["sources"]["deployments"]
+            storage = "targets" if "prepare" in self.state["steps"] else "sources"
+            bucket = self.state[storage]["deployments"]
             key = "resource-name-migration/templates/" + identifier + ".json"
             self.s3.put_object(Bucket=bucket, Key=key, Body=body.encode(), ContentType="application/json")
             request["TemplateURL"] = f"https://{bucket}.s3.{self.args.region}.amazonaws.com/{key}"
@@ -535,24 +586,36 @@ class Migration:
         logical, parameter, purpose = BUCKETS[kind]
         target = self.state["targets"][purpose]
         live = self.template(kind)
-        if logical in live["Resources"] and (
-            live["Resources"][logical].get("DeletionPolicy") != "Retain"
-            or live["Resources"][logical].get("UpdateReplacePolicy") != "Retain"
-        ):
-            raise RuntimeError("Apply and verify the retention phase before detaching the original bucket.")
+        for resource_id in (logical, logical + "Policy"):
+            if resource_id in live["Resources"] and (
+                live["Resources"][resource_id].get("DeletionPolicy") != "Retain"
+                or live["Resources"][resource_id].get("UpdateReplacePolicy") != "Retain"
+            ):
+                raise RuntimeError("Apply and verify the retention phase before detaching original storage and its policy.")
         final = naming_template(kind, live)
         if logical not in final["Resources"]:
             saved = json.loads((WORK / f"{kind}-import-template.json").read_text())
-            self.deploy_template(kind, saved, {parameter: target}, imports=[{
-                "ResourceType": "AWS::S3::Bucket", "LogicalResourceId": logical,
-                "ResourceIdentifier": {"BucketName": target},
-            }])
+            imports = bucket_imports(logical, target, live["Resources"])
+            # Import may only add resources; outputs and existing references are restored afterward.
+            self.deploy_template(kind, storage_import_template(live, saved, imports), imports=imports)
+            self.deploy_template(kind, saved)
+            self.state["steps"].append("cutover-" + kind)
+            self.save()
+            return
+        physical = self.cf.describe_stack_resource(StackName=STACKS[kind], LogicalResourceId=logical)["StackResourceDetail"]["PhysicalResourceId"]
+        if physical == target:
+            saved = json.loads((WORK / f"{kind}-import-template.json").read_text())
+            self.deploy_template(kind, saved)
             self.state["steps"].append("cutover-" + kind)
             self.save()
             return
         overrides = {parameter: target}
+        allowed_removals = [logical, logical + "Policy"]
         if kind == "jobs":
-            final = self.paused_template(final)
+            if live["Resources"]["MeetingAudioMalwareProtectionPlan"].get("DeletionPolicy") != "Retain":
+                raise RuntimeError("Apply retention to the original audio protection plan before cutover.")
+            final = self.paused_template(named_audio_protection(final))
+            allowed_removals.append("MeetingAudioMalwareProtectionPlan")
             overrides.update(ArtifactBucketName=self.state["targets"]["artifacts"],
                              EvidenceVectorBucketName=self.state["targets"]["evidence-vectors"],
                              KnowledgeBaseGeneration="v3")
@@ -560,14 +623,12 @@ class Migration:
             overrides["CloudFrontName"] = f"pilarprep-{self.args.environment}-web"
         self.copy_objects(purpose)
         save_json(WORK / f"{kind}-import-template.json", final)
-        detached = copy.deepcopy(final)
-        del detached["Resources"][logical]
-        detached = literal_bucket_references(detached, logical, target, self.args.region)
-        self.deploy_template(kind, detached, overrides, allowed_removals=[logical])
-        self.deploy_template(kind, final, overrides, imports=[{
-            "ResourceType": "AWS::S3::Bucket", "LogicalResourceId": logical,
-            "ResourceIdentifier": {"BucketName": target},
-        }])
+        detached = detach_storage(final, logical, target, self.args.region)
+        self.deploy_template(kind, detached, overrides, allowed_removals=allowed_removals)
+        detached = self.template(kind)
+        imports = bucket_imports(logical, target, detached["Resources"])
+        self.deploy_template(kind, storage_import_template(detached, final, imports), imports=imports)
+        self.deploy_template(kind, final)
         self.state["steps"].append("cutover-" + kind)
         self.save()
 
@@ -621,6 +682,16 @@ class Migration:
         self.require_apply()
         if "cutover-jobs" not in self.state["steps"]:
             raise RuntimeError("Activate the new GuardDuty protection plan before copying audio uploads.")
+        jobs = self.outputs("jobs")
+        plan = self.client("guardduty").get_malware_protection_plan(
+            MalwareProtectionPlanId=jobs["MeetingAudioMalwareProtectionPlanId"],
+        )
+        protected = plan.get("ProtectedResource", {}).get("S3Bucket", {})
+        if (plan.get("Status") != "ACTIVE"
+                or protected.get("BucketName") != self.state["targets"]["meeting-evidence"]
+                or "audio/uploads/" not in protected.get("ObjectPrefixes", [])
+                or plan.get("Actions", {}).get("Tagging", {}).get("Status") != "ENABLED"):
+            raise RuntimeError("The renamed audio bucket does not have active scan-and-tag protection.")
         table, records = self.record_inventory()
         eligible = []
         now = int(time.time())
@@ -692,6 +763,11 @@ class Migration:
                 active["deployments"] = parameters["RuntimeCodeBucket"]
             if kind == "jobs" and "EvidenceVectorBucketName" in outputs:
                 active["evidence-vectors"] = outputs["EvidenceVectorBucketName"]
+            elif kind == "jobs" and "BlueMesaVectorBucketArn" in outputs:
+                vector = self.client("s3vectors").get_vector_bucket(
+                    vectorBucketArn=outputs["BlueMesaVectorBucketArn"],
+                )["vectorBucket"]
+                active["evidence-vectors"] = vector["vectorBucketName"]
         self.log(json.dumps({"activeBucketNames": active}, indent=2))
 
 

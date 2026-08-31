@@ -135,6 +135,7 @@ Parameters:
 
 Conditions:
   HasMeetingEvidenceBucketName: !Not [!Equals [!Ref MeetingEvidenceBucketName, ""]]
+  UsesGeneratedMeetingBucket: !Equals [!Ref MeetingEvidenceBucketName, ""]
   HasEvidenceVectorBucketName: !Not [!Equals [!Ref EvidenceVectorBucketName, ""]]
   HasSecondaryAllowedOrigin: !Not [!Equals [!Ref SecondaryAllowedOrigin, ""]]
   HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, ""]]
@@ -571,6 +572,9 @@ Resources:
 
   MeetingAudioMalwareProtectionPlan:
     Type: AWS::GuardDuty::MalwareProtectionPlan
+    Condition: UsesGeneratedMeetingBucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     DependsOn:
       - MeetingEvidenceBucketPolicy
     Properties:
@@ -586,6 +590,40 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${ResourcePrefix}-meeting-audio-malware-protection"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Application
+          Value: sa-briefing-generator
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: DataClassification
+          Value: demo
+
+  NamedMeetingAudioMalwareProtectionPlan:
+    Type: AWS::GuardDuty::MalwareProtectionPlan
+    Condition: HasMeetingEvidenceBucketName
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    DependsOn: MeetingEvidenceBucketPolicy
+    Properties:
+      Role: !GetAtt GuardDutyMalwareProtectionRole.Arn
+      ProtectedResource:
+        S3Bucket:
+          BucketName: !Ref MeetingEvidenceBucket
+          ObjectPrefixes:
+            - audio/uploads/
+      Actions:
+        Tagging:
+          Status: ENABLED
+      Tags:
+        - Key: Name
+          Value: !Sub "pilarprep-${EnvironmentName}-meeting-audio-malware-protection"
         - Key: Project
           Value: !Ref ProjectName
         - Key: Application
@@ -866,7 +904,6 @@ Resources:
 
   GuardDutyScanResultRule:
     Type: AWS::Events::Rule
-    DependsOn: MeetingAudioMalwareProtectionPlan
     Properties:
       Name: !Sub "${ResourcePrefix}-meeting-audio-scan-result"
       Description: Sends PilarPrep meeting-upload malware scan results through the unified job queue.
@@ -2342,10 +2379,16 @@ Outputs:
     Value: !Ref MeetingEvidenceBucket
   MeetingAudioMalwareProtectionPlanId:
     Description: GuardDuty Malware Protection plan scoped to the meeting upload quarantine prefix.
-    Value: !GetAtt MeetingAudioMalwareProtectionPlan.MalwareProtectionPlanId
+    Value: !If
+      - HasMeetingEvidenceBucketName
+      - !GetAtt NamedMeetingAudioMalwareProtectionPlan.MalwareProtectionPlanId
+      - !GetAtt MeetingAudioMalwareProtectionPlan.MalwareProtectionPlanId
   MeetingAudioMalwareProtectionPlanStatus:
     Description: Current GuardDuty Malware Protection plan status.
-    Value: !GetAtt MeetingAudioMalwareProtectionPlan.Status
+    Value: !If
+      - HasMeetingEvidenceBucketName
+      - !GetAtt NamedMeetingAudioMalwareProtectionPlan.Status
+      - !GetAtt MeetingAudioMalwareProtectionPlan.Status
   GuardDutyScanResultRuleArn:
     Description: EventBridge Event 1 rule delivering meeting-audio scan results to the unified queue.
     Value: !GetAtt GuardDutyScanResultRule.Arn

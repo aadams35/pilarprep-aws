@@ -1074,6 +1074,27 @@ if (
   throw new Error("Latest-packet read did not return approved version 3.");
 }
 
+const latestDownloadUrl = latest.body.packet?.metadata?.docxDownloadUrl;
+if (
+  !latestDownloadUrl?.startsWith("https://") ||
+  ![
+    `${artifactBucket}.s3.amazonaws.com`,
+    `${artifactBucket}.s3.${region}.amazonaws.com`,
+  ].includes(new URL(latestDownloadUrl).hostname)
+) {
+  throw new Error("Saved packet did not receive a fresh link from the active artifact bucket.");
+}
+const latestDownload = await fetch(latestDownloadUrl);
+if (
+  latestDownload.status !== 200 ||
+  !latestDownload.headers.get("content-type")?.includes(
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  )
+) {
+  throw new Error(`Saved-packet DOCX returned HTTP ${latestDownload.status}.`);
+}
+await latestDownload.arrayBuffer();
+
 const artifactQuery = new URLSearchParams({
   clientId,
   projectId,
@@ -1135,6 +1156,7 @@ console.table({
   catchupProvider: catchup.result.provider,
   catchupReadOnly: true,
   clientDirectory: "latest approved + handoff",
+  savedPacketDownload: "200 from active bucket",
   docxDownload: "200",
   directS3: "403",
   generation: `${generation.durationMs} ms / ${generation.polls} polls`,

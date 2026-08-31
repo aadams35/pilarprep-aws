@@ -1321,6 +1321,17 @@ def _get_latest(event: Mapping[str, Any], client_id: str) -> dict[str, Any]:
     scope, metadata, document = _read_latest_approved(
         event, require_identifier(client_id, "clientId")
     )
+    stored_packet = document.get("response") or document
+    if not isinstance(stored_packet, dict):
+        raise ValueError("Stored packet is invalid")
+    packet = dict(stored_packet)
+    packet_metadata = dict(packet.get("metadata") or {})
+    # Signed links are transient; keep the approved object and its digest unchanged.
+    packet_metadata.pop("docxDownloadUrl", None)
+    if metadata.get("approvedDocxArtifactKey"):
+        download = _artifact_download(scope, metadata, "brief", "docx")
+        packet_metadata["docxDownloadUrl"] = download["downloadUrl"]
+    packet["metadata"] = packet_metadata
     return response(
         event,
         200,
@@ -1329,7 +1340,7 @@ def _get_latest(event: Mapping[str, Any], client_id: str) -> dict[str, Any]:
             "projectId": scope["projectId"],
             "packetVersion": metadata.get("approvedPacketVersion"),
             "approvedAt": metadata.get("approvedAt"),
-            "packet": document.get("response") or document,
+            "packet": packet,
             "requestContext": document.get("request") or {},
         },
     )
@@ -1371,6 +1382,12 @@ def _get_artifact(event: Mapping[str, Any], artifact_type: str) -> dict[str, Any
     format_name = _query(event).get("format", "docx")
     if format_name not in {"json", "docx"}:
         raise ValueError("format must be json or docx")
+    return response(event, 200, _artifact_download(scope, metadata, artifact_type, format_name))
+
+
+def _artifact_download(
+    scope: Mapping[str, str], metadata: Mapping[str, Any], artifact_type: str, format_name: str
+) -> dict[str, Any]:
     if artifact_type == "brief":
         key_name = "approvedDocxArtifactKey" if format_name == "docx" else "approvedArtifactKey"
     else:
@@ -1398,17 +1415,13 @@ def _get_artifact(event: Mapping[str, Any], artifact_type: str) -> dict[str, Any
         Params=params,
         ExpiresIn=900,
     )
-    return response(
-        event,
-        200,
-        {
-            "artifactType": artifact_type,
-            "format": format_name,
-            "artifactKey": artifact_key,
-            "downloadUrl": url,
-            "expiresIn": 900,
-        },
-    )
+    return {
+        "artifactType": artifact_type,
+        "format": format_name,
+        "artifactKey": artifact_key,
+        "downloadUrl": url,
+        "expiresIn": 900,
+    }
 
 
 def handler(event: object, _context: Any) -> dict[str, Any]:

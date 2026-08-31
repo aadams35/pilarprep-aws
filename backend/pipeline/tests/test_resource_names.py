@@ -47,6 +47,39 @@ class ResourceNamingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             migration.literal_bucket_references({"Fn::GetAtt": ["Store", "WebsiteURL"]}, "Store", "new-store", "us-east-1")
 
+    def test_existing_policy_is_imported_with_bucket_without_recreation(self):
+        template = {"Resources": {
+            "Store": {"Type": "AWS::S3::Bucket"},
+            "StorePolicy": {"Type": "AWS::S3::BucketPolicy"},
+            "Consumer": {"Type": "AWS::Example", "DependsOn": ["StorePolicy", "Other"],
+                         "Properties": {"Bucket": {"Ref": "Store"}}},
+            "Other": {"Type": "AWS::Example"},
+        }}
+        detached = migration.detach_storage(template, "Store", "new-store", "us-east-1")
+        self.assertNotIn("Store", detached["Resources"])
+        self.assertNotIn("StorePolicy", detached["Resources"])
+        self.assertEqual(detached["Resources"]["Consumer"]["DependsOn"], ["Other"])
+        self.assertEqual(detached["Resources"]["Consumer"]["Properties"]["Bucket"], "new-store")
+        imports = migration.bucket_imports("Store", "new-store", detached["Resources"])
+        self.assertEqual([item["ResourceIdentifier"] for item in imports],
+                         [{"BucketName": "new-store"}, {"Bucket": "new-store"}])
+        self.assertEqual(migration.bucket_imports("Store", "new-store", template["Resources"]), [])
+        self.assertIn("StorePolicy", template["Resources"])
+
+    def test_import_does_not_change_outputs_or_existing_resource_properties(self):
+        live = {"Resources": {"Consumer": {"Properties": {"Bucket": "new-store"}}},
+                "Outputs": {"BucketName": {"Value": "new-store"}}}
+        final = {"Resources": {"Store": {"Type": "AWS::S3::Bucket"},
+                 "StorePolicy": {"Type": "AWS::S3::BucketPolicy"},
+                 "Consumer": {"Properties": {"Bucket": {"Ref": "Store"}}}},
+                 "Outputs": {"BucketName": {"Value": {"Ref": "Store"}}}}
+        imports = migration.bucket_imports("Store", "new-store", live["Resources"])
+        actual = migration.storage_import_template(live, final, imports)
+        self.assertEqual(actual["Outputs"], live["Outputs"])
+        self.assertEqual(actual["Resources"]["Consumer"], live["Resources"]["Consumer"])
+        self.assertEqual(actual["Resources"]["Store"], final["Resources"]["Store"])
+        self.assertEqual(actual["Resources"]["StorePolicy"], final["Resources"]["StorePolicy"])
+
     def test_naming_changes_leave_compute_and_auth_unchanged(self):
         for kind in ["core", "jobs", "frontend"]:
             source = migration.load_template((ROOT / "infrastructure" / migration.FILES[kind]).read_text())
@@ -122,6 +155,34 @@ class ResourceNamingTests(unittest.TestCase):
         runner.log = MagicMock()
         runner.resume()
         runner.copy_objects.assert_not_called()
+
+    def test_named_audio_uses_new_plan_and_preserves_legacy_plan(self):
+        template = migration.load_template((ROOT / "infrastructure" / migration.FILES["jobs"]).read_text())
+        result = migration.named_audio_protection(template)
+        original = result["Resources"]["MeetingAudioMalwareProtectionPlan"]
+        replacement = result["Resources"]["NamedMeetingAudioMalwareProtectionPlan"]
+        self.assertEqual(original["Condition"], "UsesGeneratedMeetingBucket")
+        self.assertEqual(original["DeletionPolicy"], "Retain")
+        self.assertEqual(replacement["Condition"], "HasMeetingEvidenceBucketName")
+        self.assertEqual(replacement["Properties"]["Actions"]["Tagging"]["Status"], "ENABLED")
+        self.assertNotIn("DependsOn", result["Resources"]["GuardDutyScanResultRule"])
+        self.assertIn("Fn::If", result["Outputs"]["MeetingAudioMalwareProtectionPlanId"]["Value"])
+
+    def test_rescan_refuses_plan_that_still_points_to_old_bucket(self):
+        runner = object.__new__(migration.Migration)
+        runner.args = SimpleNamespace(apply=True)
+        runner.state = {"steps": ["cutover-jobs"], "targets": {"meeting-evidence": "new-store"}}
+        runner.outputs = MagicMock(return_value={"MeetingAudioMalwareProtectionPlanId": "plan"})
+        guardduty = MagicMock()
+        guardduty.get_malware_protection_plan.return_value = {
+            "Status": "ACTIVE", "ProtectedResource": {"S3Bucket": {"BucketName": "old-store", "ObjectPrefixes": ["audio/uploads/"]}},
+            "Actions": {"Tagging": {"Status": "ENABLED"}},
+        }
+        runner.client = MagicMock(return_value=guardduty)
+        runner.record_inventory = MagicMock()
+        with self.assertRaisesRegex(RuntimeError, "scan-and-tag"):
+            runner.rescan_audio()
+        runner.record_inventory.assert_not_called()
 
     def test_existing_secrets_use_previous_value_not_a_logged_value(self):
         runner = object.__new__(migration.Migration)

@@ -2,17 +2,47 @@
 
 ## Rollout Status
 
-The interface cleanup is live at `https://pilarprep.app`, and the existing
-CloudFront distribution has the console name `pilarprep-demo-web`.
-Four private S3 destinations have been created and populated: `web-assets`,
-`artifacts`, `meeting-evidence`, and `deployments`. The vector bucket is planned
-but has not been created. Original buckets are still serving the application.
+The approved storage cutover is complete. The existing CloudFront distribution
+has the console name `pilarprep-demo-web`, serves the new private `web-assets`
+bucket, and still uses [pilarprep.app](https://pilarprep.app).
 
-The storage cutover is pending operator approval because it changes the connected
-Lambda permissions, malware-scanning configuration, and evidence index together.
-The queue consumer is still running. No original bucket has been detached or deleted.
-Use the read-only `status` phase to distinguish proposed names from live storage;
-this document is not evidence that the migration has completed.
+All five active stores use `pilarprep-demo-<purpose>-<account>-us-east-1`:
+`web-assets`, `artifacts`, `meeting-evidence`, `deployments`, and `evidence-vectors`.
+The core, jobs, AgentCore, and frontend stacks reached `UPDATE_COMPLETE`.
+The queue consumer is enabled again. Original buckets, their policies, and the
+old evidence index remain retained for rollback; they have not been deleted.
+
+Verification confirmed private access, encryption, versioning, CloudFront origin
+access control, HTTPS redirection, HSTS, and the existing WAF association.
+The new Knowledge Base indexed all 18 approved documents with no ingestion
+failures. The one eligible retained audio upload received a fresh, verified clean
+GuardDuty result in the new bucket. A fresh browser received the current bundle,
+without the synthetic-data badge or demo MP3 button; direct frontend S3 access
+returned 403.
+
+Run the read-only `status` phase for current AWS state. Historical names still
+appear in the console for retained rollback resources, not as duplicate active
+application stores.
+
+### Verification Notes
+
+- The complete local release checks passed, including 149 pipeline tests,
+  67 Bedrock tests, 79 AgentCore tests, 48 frontend tests, 34 evaluation-harness
+  tests, four golden scenarios, and 14 browser tests.
+- Public-browser Nova Pro generation, approval, saved-packet reload, fresh DOCX
+  download, AgentCore catch-up, and a subsequent handoff completed successfully.
+- The full automated workflow smoke was not a clean pass: Business Case
+  refinement twice returned an out-of-scope section below the existing depth
+  requirement. The validator rejected it and preserved the previous version.
+  An initial handoff returned invalid model JSON after bounded retries; a later
+  handoff using the newly approved packet succeeded. These are follow-up
+  model-output reliability issues, not reasons to relax validation.
+- Model, Guardrail, token, timeout, and concurrency parameters were preserved.
+  The copied AgentCore runtime package matched the original byte for byte.
+- A fresh scan of the retained upload passed. A new signed-in upload through the
+  complete transcription/review flow was not repeated without a workspace login.
+- One identified failed synthetic handoff message remains in the DLQ. Deleting
+  it requires separate explicit approval; no queue purge was performed.
 
 ## Naming Convention
 
@@ -71,9 +101,12 @@ Review the proposed names and schedule a quiet maintenance window. The staged ph
 3. `pause`: verify the queue is idle and no nonterminal jobs remain, then pause only
    queue consumption. Submitted jobs can still wait in SQS.
 4. `cutover-core`: point core consumers to the populated artifact bucket, retain the
-   original, and import the replacement under the same logical resource ID.
+   original and its policy, and import both replacements under the same logical
+   resource IDs. Restore dependent references in a separate update after import.
 5. `cutover-jobs`: move the meeting bucket, update artifact permissions, activate
-   malware protection, and replace retained vector storage and its Knowledge Base.
+   a new malware-protection plan for the new bucket, and replace retained vector
+   storage and its Knowledge Base. GuardDuty cannot retarget a plan to a different
+   bucket through its update API.
 6. `reindex`: ingest the copied approved evidence into the new vector index.
 7. `cutover-agent`: update AgentCore's artifact, packaging and retrieval references;
    refresh the shared worker's SDK layer reference.
@@ -81,7 +114,7 @@ Review the proposed names and schedule a quiet maintenance window. The staged ph
    without GuardDuty result tags. The new scan must verify each new object version.
 9. `resume`: copy any final input changes and resume the shared worker.
 10. `cutover-frontend`: switch the existing distribution to the populated web bucket
-    and import that bucket into the frontend stack.
+    and import that bucket and policy into the frontend stack.
 
 Run each phase explicitly, check its result, then continue:
 
@@ -95,10 +128,17 @@ continue after a failure. The utility retains snapshots, copy manifests, and
 pre-rescan metadata in ignored `work/resource-names/`. These files may contain
 private object keys and must not be committed or shared.
 
-After cutover, publish the current frontend and wait for its CloudFront invalidation.
+After cutover, republish Lambda packages into the new deployment bucket or repoint
+their code references only after verifying that the copied packages are identical.
+Publish the current frontend and wait for its CloudFront invalidation.
 Verify fresh-browser sign-in, generation, downloads, evidence retrieval, and an
 authorized BlueMesa audio upload. Never reuse a successful scan from the old
 bucket as proof that a new object version passed scanning.
+
+Saved packet reads issue fresh, scoped DOCX download links from the current
+artifact bucket. The immutable approved JSON and its digest are not rewritten
+to persist expiring URLs. The live pipeline smoke test checks both the latest
+packet's download link and the dedicated artifact endpoint.
 
 ## Retention and Rollback
 
