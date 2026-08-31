@@ -27,6 +27,14 @@ The frontend slows unchanged job-status polls up to five seconds apart. A 429 re
 
 WAF rate-limit changes require an explicit security review. The frontend recovery fix does not change WAF, bypass CloudFront, relax sign-in requirements, or skip GuardDuty. The existing edge limit may still be reached by multiple users sharing an IP until an approved policy change separates submissions from polling traffic.
 
+## Slow Handoff Generation
+
+Compare queue wait with worker duration before increasing concurrency. A handoff on August 31 waited 24 ms in SQS but took 181 seconds in the worker, including Strands structured-output recovery. The queue was not the bottleneck.
+
+Handoff generation uses non-streaming Bedrock calls through Strands, requests the schema tool directly, and enables optimized latency only for Nova Pro. It keeps the same Guardrail, approved-context checks, scoped tools, Memory, and bounded recovery. The output token ceiling permits a complete packet; it is not a target length. No live draft is streamed to the page, so non-streaming does not remove a user-visible capability.
+
+`handoff_model_completed` records duration, accumulated model calls, and token usage without prompt or response text. The packet's `metadata.agentTimingsMs` separates context preparation from generation and validation. These phase timings are not pure Bedrock inference time. A structured-output recovery warning indicates additional model work; a low queue wait does not rule that out.
+
 ## Brief and Handoff State
 
 Pre-call context starts empty. A completed handoff is displayed only when its customer, client, project, approved packet version, audience, and focus match the selected view. Navigating back to a matching saved handoff reuses it without submitting another job. Changing the customer cancels the browser request and prevents late results from replacing the new workspace.

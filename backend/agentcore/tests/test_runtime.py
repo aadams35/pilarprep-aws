@@ -749,6 +749,107 @@ class RuntimeTests(unittest.TestCase):
             ["guard_content"],
         )
 
+    def test_handoff_uses_non_streaming_structured_output_with_model_specific_latency(self):
+        for model_id in (
+            "us.amazon.nova-pro-v1:0",
+            "us.amazon.nova-micro-v1:0",
+            "global.anthropic.claude-sonnet-4-6",
+        ):
+            with self.subTest(model_id=model_id):
+                captured = {"invocations": 0}
+                fake_strands = types.ModuleType("strands")
+                fake_models = types.ModuleType("strands.models")
+
+                class BedrockModel:
+                    def __init__(self, **options):
+                        captured["model"] = options
+
+                class StructuredOutput:
+                    def model_dump(self):
+                        return MODEL_RESULT
+
+                class Agent:
+                    def __init__(self, **options):
+                        captured["agent"] = options
+
+                    def __call__(self, prompt, **options):
+                        captured["invocations"] += 1
+                        captured["prompt"] = prompt
+                        captured["output"] = options
+                        return types.SimpleNamespace(structured_output=StructuredOutput())
+
+                fake_strands.Agent = Agent
+                fake_models.BedrockModel = BedrockModel
+                with (
+                    patch.dict(sys.modules, {"strands": fake_strands, "strands.models": fake_models}),
+                    patch.object(runtime_service, "_handoff_output_model", return_value=StructuredOutput),
+                    patch.dict(runtime_service.os.environ, {
+                        "BEDROCK_GUARDRAIL_ID": "guardrail-test",
+                        "BEDROCK_GUARDRAIL_VERSION": "2",
+                    }),
+                ):
+                    result = runtime_service._default_reasoner(
+                        '{"mode":"handoff","focus":"Approved customer goals"}',
+                        model_id,
+                        {"memory": "available"},
+                    )
+                self.assertEqual(result, MODEL_RESULT)
+                self.assertEqual(captured["invocations"], 1)
+                self.assertFalse(captured["model"]["streaming"])
+                self.assertEqual(captured["model"]["guardrail_id"], "guardrail-test")
+                self.assertEqual(captured["model"]["guardrail_version"], "2")
+                self.assertEqual(captured["model"]["model_id"], model_id)
+                self.assertIsNone(captured["agent"]["callback_handler"])
+                self.assertEqual(captured["agent"]["session_manager"], {"memory": "available"})
+                self.assertIn("directly through the StructuredOutput", captured["agent"]["system_prompt"])
+                self.assertNotIn("- Return JSON only.", captured["agent"]["system_prompt"])
+                self.assertEqual(captured["output"]["structured_output_model"], StructuredOutput)
+                self.assertIn("guardContent", captured["prompt"][1])
+                if "nova-pro" in model_id:
+                    self.assertEqual(captured["model"]["additional_args"], {"performanceConfig": {"latency": "optimized"}})
+                else:
+                    self.assertNotIn("additional_args", captured["model"])
+
+    def test_structured_handoff_repair_does_not_request_another_text_draft(self):
+        prompts = []
+
+        class OutputModel:
+            pass
+
+        def agent(prompt, **_options):
+            prompts.append(prompt)
+            return "invalid output" if len(prompts) == 1 else json.dumps(MODEL_RESULT)
+
+        result = runtime_service._invoke_json_agent(
+            agent, "original request", guarded_content="customer facts", output_model=OutputModel,
+        )
+        self.assertEqual(result, MODEL_RESULT)
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("directly through the OutputModel", prompts[1][0]["text"])
+        self.assertEqual(prompts[0][1], prompts[1][1])
+
+    def test_handoff_model_diagnostics_exclude_customer_content(self):
+        result = types.SimpleNamespace(
+            message={"content": [{"text": json.dumps(MODEL_RESULT)}]},
+            metrics=types.SimpleNamespace(
+                cycle_count=1, accumulated_usage={"inputTokens": 1200, "outputTokens": 800},
+            ),
+        )
+        with self.assertLogs(runtime_service.LOGGER, level="INFO") as logged:
+            runtime_service._invoke_json_agent(lambda *_args, **_kwargs: result, "private-customer-input")
+        self.assertNotIn("private-customer-input", logged.output[0])
+        self.assertNotIn(MODEL_RESULT["projectAnswer"], logged.output[0])
+        diagnostics = json.loads(logged.records[0].getMessage())
+        self.assertEqual(diagnostics["accumulatedModelCalls"], 1)
+        self.assertEqual(diagnostics["inputTokens"], 1200)
+        self.assertEqual(diagnostics["outputTokens"], 800)
+
+    def test_handoff_reports_context_and_generation_timings(self):
+        response = self.invoke(HANDOFF_PAYLOAD)
+        timings = response["metadata"]["agentTimingsMs"]
+        self.assertEqual(set(timings), {"contextPreparation", "generationAndValidation"})
+        self.assertTrue(all(isinstance(value, int) and value >= 0 for value in timings.values()))
+
     def test_strands_tool_protocol_error_uses_direct_bedrock_recovery(self):
         expected = {
             "projectAnswer": MODEL_RESULT["projectAnswer"],

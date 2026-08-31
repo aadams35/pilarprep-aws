@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import time
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
@@ -268,7 +269,18 @@ def _invoke_json_agent(
         options = (
             {"structured_output_model": output_model} if output_model else {}
         )
-        return agent(_agent_prompt_content(value, guarded_content), **options)
+        started = time.perf_counter()
+        result = agent(_agent_prompt_content(value, guarded_content), **options)
+        metrics = getattr(result, "metrics", None)
+        usage = getattr(metrics, "accumulated_usage", {})
+        LOGGER.info(json.dumps({
+            "event": "handoff_model_completed",
+            "elapsedMs": int((time.perf_counter() - started) * 1000),
+            "accumulatedModelCalls": getattr(metrics, "cycle_count", None),
+            "inputTokens": usage.get("inputTokens") if isinstance(usage, Mapping) else None,
+            "outputTokens": usage.get("outputTokens") if isinstance(usage, Mapping) else None,
+        }))
+        return result
 
     try:
         return _json_from_model(invoke(prompt))
@@ -277,10 +289,16 @@ def _invoke_json_agent(
             "Strands response was not valid JSON; requesting one repair attempt",
             extra={"errorType": type(first_error).__name__},
         )
+    output_instruction = (
+        f"Submit the full answer directly through the {output_model.__name__} "
+        "structured-output tool. Do not first write a separate JSON draft. "
+        if output_model else "Return JSON only, with no Markdown or preface. "
+    )
     repair_prompt = (
         "Your previous answer was not a complete valid JSON object. Regenerate the "
-        "entire answer now using the required schema. Return JSON only, with no "
-        "Markdown, preface, commentary, or omitted fields. The original task follows:\n"
+        "entire answer now using the required schema, with no omitted fields. "
+        + output_instruction
+        + "The original task follows:\n"
         + prompt
     )
     try:
@@ -817,10 +835,13 @@ def _default_reasoner(
         "model_id": model_id,
         "region_name": os.getenv("AWS_REGION", "us-east-1"),
         "temperature": 0.1,
-        "max_tokens": 4000 if _is_claude_sonnet_46(model_id) else 3500,
+        "max_tokens": 6000 if _is_claude_sonnet_46(model_id) else 5000,
+        "streaming": False,
     }
     if not _is_claude_sonnet_46(model_id):
         model_options["top_p"] = 0.7
+    if _supports_optimized_latency(model_id):
+        model_options["additional_args"] = {"performanceConfig": {"latency": "optimized"}}
     guardrail_id = os.getenv("BEDROCK_GUARDRAIL_ID", "")
     guardrail_version = os.getenv("BEDROCK_GUARDRAIL_VERSION", "")
     if guardrail_id and guardrail_version:
@@ -832,10 +853,19 @@ def _default_reasoner(
             }
         )
 
+    output_model = _handoff_output_model()
+    # The schema is a tool result, not a second pass over a separately written JSON draft.
+    system_prompt = SYSTEM_PROMPT.replace(
+        "- Return JSON only. Do not wrap it in Markdown.",
+        f"- Submit the complete handoff directly through the {output_model.__name__} "
+        "structured-output tool. The required JSON shape describes its arguments. "
+        "Do not first write a separate narrative or JSON draft.",
+    )
     agent = Agent(
         model=BedrockModel(**model_options),
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         session_manager=session_manager,
+        callback_handler=None,
         agent_id="pilarprep-handoff-repair" if schema_repair_mode else None,
     )
     guarded_content = (
@@ -848,7 +878,7 @@ def _default_reasoner(
             agent,
             prompt,
             guarded_content=guarded_content,
-            output_model=_handoff_output_model(),
+            output_model=output_model,
         )
     except Exception as error:
         if not _is_recoverable_strands_protocol_error(error):
@@ -1090,6 +1120,7 @@ def handle_request(
     reasoner: Callable[[str, str, Any], Mapping[str, Any]] = _default_reasoner,
     memory_factory: Callable[[Mapping[str, str]], Any] = memory_session,
 ) -> dict[str, Any]:
+    request_started = time.perf_counter()
     request = validate_runtime_request(payload)
     if request["action"] == "analyze_meeting":
         return analyze_meeting(
@@ -1176,6 +1207,7 @@ def handle_request(
                 allowed_sources,
                 retrieved_evidence,
             )
+            generation_started = time.perf_counter()
             if request["action"] == "generate_catchup":
                 raw_generated = reasoner(
                     model_prompt,
@@ -1196,6 +1228,7 @@ def handle_request(
                     reasoner,
                 )
                 _normalize_handoff_sources(generated, allowed_sources)
+            generation_ms = int((time.perf_counter() - generation_started) * 1000)
         _assert_grounded_sources(generated, allowed_sources)
 
         source_brief = _source_response(latest)
@@ -1281,6 +1314,10 @@ def handle_request(
                 "precallHandoffSourceVersion": approved_packet_version,
                 "ragUsed": bool(retrieved_evidence),
                 "rag": retrieval_metadata,
+                "agentTimingsMs": {
+                    "contextPreparation": int((generation_started - request_started) * 1000),
+                    "generationAndValidation": generation_ms,
+                },
             },
         }
         # Brief assessments remain attached to the approved text, not to the new answer.
@@ -1381,6 +1418,8 @@ def handle_request(
                 "scopeHash": _scope_hash(request["scope"]),
                 "traceId": request["traceId"],
                 "toolCalls": tool_calls,
+                "timingsMs": response["metadata"]["agentTimingsMs"],
+                "totalLatencyMs": int((time.perf_counter() - request_started) * 1000),
             }
         )
     )
