@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
@@ -1230,7 +1231,7 @@ def handle_request(
         source_evidence = [
             dict(item)
             for item in source_brief.get("evidence", [])
-            if isinstance(item, Mapping)
+            if isinstance(item, Mapping) and item.get("section") != "projectAnswer"
         ]
         response_citations = list(
             dict.fromkeys(
@@ -1264,6 +1265,7 @@ def handle_request(
                 }
             ],
             "metadata": {
+                "packetVersion": approved_packet_version,
                 "projectId": request["scope"]["projectId"],
                 "clientId": request["scope"]["clientId"],
                 "modelId": model_id,
@@ -1272,10 +1274,33 @@ def handle_request(
                 "toolCalls": tool_calls,
                 "projectVersion": int(state.get("version", 0)),
                 "approvedPacketVersion": approved_packet_version,
+                "handoffAudienceRole": request["audienceRole"],
+                "handoffCompany": request.get("briefRequest", {}).get("company", ""),
+                "handoffFocus": request["focus"],
+                "precallHandoffStatus": "ready" if request["action"] == "create_handoff" else None,
+                "precallHandoffSourceVersion": approved_packet_version,
                 "ragUsed": bool(retrieved_evidence),
                 "rag": retrieval_metadata,
             },
         }
+        # Brief assessments remain attached to the approved text, not to the new answer.
+        response["sourceCatalog"] = deepcopy(source_brief.get("sourceCatalog", []))
+        claims = [deepcopy(claim) for claim in source_brief.get("claims", [])
+                  if isinstance(claim, Mapping) and claim.get("section") != "projectAnswer"]
+        response["claims"] = claims
+        if claims:
+            status_counts = {}
+            for claim in claims:
+                status = claim["evidenceStatus"]
+                status_counts[status] = status_counts.get(status, 0) + 1
+            linked = sum(bool(claim.get("sourceIds")) for claim in claims)
+            response["evidenceCoverage"] = {
+                "materialClaims": len(claims),
+                "claimsWithApprovedSources": linked,
+                "coveragePercent": round(linked / len(claims) * 100),
+                "statusCounts": status_counts,
+                "meaning": "Coverage measures approved source linkage, not probability of truth.",
+            }
         safety_bundle, output_safety = content_safety.screen_payload(
             {
                 "response": response,

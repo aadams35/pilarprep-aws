@@ -497,6 +497,9 @@ export type BriefResponse = {
     precallHandoffJobId?: string;
     precallHandoffStatus?: "idle" | "queued" | "preparing" | "ready" | "failed" | "stale";
     precallHandoffSourceVersion?: number;
+    handoffAudienceRole?: string;
+    handoffCompany?: string;
+    handoffFocus?: string;
     precallHandoffError?: string;
     approvedAt?: string;
     approvedPacketVersion?: number;

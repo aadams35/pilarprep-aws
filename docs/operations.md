@@ -27,6 +27,14 @@ The frontend slows unchanged job-status polls up to five seconds apart. A 429 re
 
 WAF rate-limit changes require an explicit security review. The frontend recovery fix does not change WAF, bypass CloudFront, relax sign-in requirements, or skip GuardDuty. The existing edge limit may still be reached by multiple users sharing an IP until an approved policy change separates submissions from polling traffic.
 
+## Brief and Handoff State
+
+Pre-call context starts empty. A completed handoff is displayed only when its customer, client, project, approved packet version, audience, and focus match the selected view. Navigating back to a matching saved handoff reuses it without submitting another job. Changing the customer cancels the browser request and prevents late results from replacing the new workspace.
+
+Evidence assessments belong to the packet. Handoff generation preserves the approved brief's claims, source records, and coverage in both the returned response and the saved handoff. Targeted refinement reassesses the selected tab only, retains other tabs' assessments, and recalculates coverage from the current claims. Corrected context receives a distinct source reference so unchanged tabs do not silently point to rewritten evidence.
+
+Coverage is the fraction of assessed claims linked to approved sources, not a probability of truth. Older packets without assessment records remain unassessed. Editing feedback does not remove the last valid assessment; intake changes are marked as pending. A failed refinement leaves the previous packet intact and displays an error next to it.
+
 ## Dead-letter Queue
 
 The standard queue redrives repeatedly failing messages to a DLQ. A DLQ does not automatically make the failed operation safe to replay. First classify the cause, correct permissions/configuration or bad input as appropriate, and verify the job's current approval/version state. Use the restricted operator replay path for eligible jobs. Do not repeatedly replay stale approvals or permanent validation failures.

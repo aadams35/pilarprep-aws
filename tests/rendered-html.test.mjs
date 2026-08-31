@@ -104,7 +104,9 @@ test("keeps the customer workflow and public app metadata connected", async () =
   assert.ok(page.includes("brief-surface-busy"));
   assert.ok(page.includes("const briefContent = isGenerating"));
   assert.ok(page.includes("setGeneratedBrief(null);"));
-  assert.ok(page.includes("const displayedProjectAnswer = isGenerating"));
+  assert.ok(page.includes("const displayedProjectAnswer = approved && promoted && !isProjectGenerating"));
+  assert.ok(page.includes("handoffAnswerFor(generatedBrief"));
+  assert.doesNotMatch(page, /const projectAnswer = useMemo/);
   assert.ok(page.includes("Changes"));
   assert.ok(page.includes("refinement-approve-row"));
   assert.ok(page.includes("Final quality gate"));

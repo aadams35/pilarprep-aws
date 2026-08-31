@@ -118,7 +118,7 @@ function asNextStepActions(value: unknown) {
     : [];
 }
 
-function asMetadata(value: unknown) {
+function asMetadata(value: unknown): BriefResponse["metadata"] {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -126,6 +126,9 @@ function asMetadata(value: unknown) {
   return {
     projectId: asString(value.projectId) || undefined,
     clientId: asString(value.clientId) || undefined,
+    handoffAudienceRole: asString(value.handoffAudienceRole) || undefined,
+    handoffCompany: asString(value.handoffCompany) || undefined,
+    handoffFocus: asString(value.handoffFocus) || undefined,
     artifactKey: asString(value.artifactKey) || undefined,
     docxArtifactKey: asString(value.docxArtifactKey) || undefined,
     docxDownloadUrl: asString(value.docxDownloadUrl) || undefined,
@@ -159,6 +162,25 @@ function asMetadata(value: unknown) {
     projectVersion: asNumber(value.projectVersion),
     baseBriefVersion: asNumber(value.baseBriefVersion),
     packetVersion: asNumber(value.packetVersion),
+    approvedPacketVersion: asNumber(value.approvedPacketVersion),
+    approvedAt: asString(value.approvedAt) || undefined,
+    approvalStatus: ["draft", "stale", "approved"].includes(asString(value.approvalStatus))
+      ? value.approvalStatus as "draft" | "stale" | "approved"
+      : undefined,
+    precallHandoffStatus: ["idle", "queued", "preparing", "ready", "failed", "stale"].includes(asString(value.precallHandoffStatus))
+      ? value.precallHandoffStatus as "idle" | "queued" | "preparing" | "ready" | "failed" | "stale"
+      : undefined,
+    precallHandoffSourceVersion: asNumber(value.precallHandoffSourceVersion),
+    precallHandoffJobId: asString(value.precallHandoffJobId) || undefined,
+    precallHandoffError: asString(value.precallHandoffError) || undefined,
+    meetingApprovalId: asString(value.meetingApprovalId) || undefined,
+    meetingProposalId: asString(value.meetingProposalId) || undefined,
+    meetingId: asString(value.meetingId) || undefined,
+    meetingApprovalStatus: value.meetingApprovalStatus === "approved" ? "approved" : undefined,
+    meetingApprovedAt: asString(value.meetingApprovedAt) || undefined,
+    meetingAcceptedChangeCount: asNumber(value.meetingAcceptedChangeCount),
+    meetingRejectedChangeCount: asNumber(value.meetingRejectedChangeCount),
+    meetingApprovalArtifactKey: asString(value.meetingApprovalArtifactKey) || undefined,
     refinementTarget: refinementTargets.has(asString(value.refinementTarget))
       ? (asString(value.refinementTarget) as RefinementTarget)
       : undefined,
@@ -427,10 +449,7 @@ export function normalizeBriefResponse(
     objections: asStringList(source.objections, [
       "Objection guidance was not returned by the model. Treat this as an item to refine before the customer meeting.",
     ]),
-    projectAnswer: asString(
-      source.projectAnswer,
-      "Project Brain did not return an answer yet. Promote the final brief with meeting notes, then ask again."
-    ),
+    projectAnswer: asString(source.projectAnswer),
     projectArtifacts: asProjectArtifacts(source.projectArtifacts),
     evidence: asEvidence(source.evidence),
     sourceCatalog,

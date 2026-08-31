@@ -65,6 +65,7 @@ import {
   type RefinementDrafts,
 } from "@/lib/refinement";
 import { normalizeBriefResponse } from "@/lib/response";
+import { handoffAnswerFor, mergeHandoffPacket } from "@/lib/handoff-packet";
 import { readApiJson, readRetryDelay } from "@/lib/api-response";
 import type {
   BriefRequest,
@@ -987,8 +988,6 @@ export default function App() {
   const [serverBriefHistory, setServerBriefHistory] = useState<BriefHistoryEntry[]>([]);
   const [isLibraryLoading, setIsLibraryLoading] = useState(hostedJobsMode);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
-  const [projectBrainAnswer, setProjectBrainAnswer] = useState("");
-  const [projectAnswerKey, setProjectAnswerKey] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStageMode, setGenerationStageMode] = useState<GenerationStageMode>("prebrief");
   const [pipelineJobStatus, setPipelineJobStatus] = useState<ActivePipelineStatus | null>(null);
@@ -1037,6 +1036,7 @@ export default function App() {
   const agentSessionIdRef = useRef("");
   const generationRequestRef = useRef(false);
   const pipelineAbortRef = useRef<AbortController | null>(null);
+  const packetRequestEpochRef = useRef(0);
   const activeTabRef = useRef<BriefTab>("businessCase");
   const catchupRequestRef = useRef(false);
   const catchupAbortRef = useRef<AbortController | null>(null);
@@ -1307,14 +1307,6 @@ export default function App() {
       setSelectedHistoryId(
         typeof saved.selectedHistoryId === "string" ? saved.selectedHistoryId : null
       );
-      setProjectBrainAnswer(
-        typeof saved.projectBrainAnswer === "string"
-          ? saved.projectBrainAnswer
-          : ""
-      );
-      setProjectAnswerKey(
-        typeof saved.projectAnswerKey === "string" ? saved.projectAnswerKey : ""
-      );
       const savedBrief =
         typeof saved.generatedBrief === "object" && saved.generatedBrief !== null
           ? (saved.generatedBrief as BriefResponse)
@@ -1495,8 +1487,6 @@ export default function App() {
         generatedBrief,
         briefHistory,
         selectedHistoryId,
-        projectBrainAnswer,
-        projectAnswerKey,
         selectedLifecycleStage,
         gateDecisions,
       })
@@ -1525,8 +1515,6 @@ export default function App() {
     modelPreference,
     meetingNotes,
     meetingType,
-    projectAnswerKey,
-    projectBrainAnswer,
     promoted,
     refinementDrafts,
     role,
@@ -1747,6 +1735,21 @@ const industryFocus = useMemo(() => {
   const currentBriefHistoryIndex = selectedHistoryId
     ? briefHistory.findIndex((entry) => entry.id === selectedHistoryId)
     : -1;
+  const savedPacketInputs = briefHistory[currentBriefHistoryIndex]
+    ?? serverBriefHistory.find((entry) => entry.id === selectedHistoryId);
+  const peopleInputKey = (people: DecisionMakerContext[]) => JSON.stringify(people.map((person) => [
+    person.name.trim(), person.title.trim(), person.context.trim(), person.source?.trim() ?? "",
+    person.roleType ?? "decision-maker", person.organizationalRole?.trim() ?? "", person.influence, person.stance,
+  ]));
+  const pendingIntakeChanges = Boolean(generatedBrief && savedPacketInputs && (
+    company !== savedPacketInputs.company || industry !== savedPacketInputs.industry ||
+    meetingType !== savedPacketInputs.meetingType || companySize !== savedPacketInputs.companySize ||
+    context !== savedPacketInputs.context || companyValues !== savedPacketInputs.companyValues ||
+    companyValuesUrl !== (savedPacketInputs.companyValuesUrl ?? "") ||
+    additionalDirection !== (savedPacketInputs.additionalDirection ?? "") ||
+    JSON.stringify(selectedPillars) !== JSON.stringify(normalizePillarRanking(savedPacketInputs.selectedPillars)) ||
+    peopleInputKey(usableDecisionMakers) !== peopleInputKey(savedPacketInputs.decisionMakers)
+  ));
   const activeComparison = useMemo(
     () =>
       comparisonForSelectedRefinement(
@@ -1772,7 +1775,7 @@ const industryFocus = useMemo(() => {
         appliedRefinementDrafts[activeTab]
       )
   );
-  const approvalReady = Boolean(generatedBrief && !isGenerating && !unresolvedRefinement);
+  const approvalReady = Boolean(generatedBrief && !isGenerating && !unresolvedRefinement && !pendingIntakeChanges);
 
   const activeBriefText = [
     `${company || "Customer"} - ${briefTabLabel(activeTab)}`,
@@ -1784,45 +1787,20 @@ const industryFocus = useMemo(() => {
     `Sources: ${generatedBrief?.sourceCatalog?.length ? generatedBrief.sourceCatalog.map((source) => source.title).join(", ") : "Evidence not recorded"}`,
   ].join("\n");
 
-  const followUpEmailText = generatedBrief?.projectArtifacts?.followUpEmail
+  const followUpEmailText = promoted && approved && generatedBrief?.projectArtifacts?.followUpEmail
     ? `Subject: ${generatedBrief.projectArtifacts.followUpEmail.subject}\n\n${generatedBrief.projectArtifacts.followUpEmail.body}`
-    : `Subject: Follow-up from PilarPrep briefing for ${company || "the customer"}\n\nThanks for the conversation. We captured ${industryFocus} as the main outcome path and ${selectedPillars[0]?.toLowerCase() || "the first priority"} as the first validation area.\n\nRecommended next step: schedule a focused working session to confirm stakeholders, success criteria, risks, pilot scope, and owners.`;
-
-  const projectAnswer = useMemo(() => {
-    const customerName = company || "the customer";
-    const stakeholderLead = usableDecisionMakers[0];
-    const stakeholderContext = stakeholderLead
-      ? ` Include ${stakeholderLead.name || "the primary stakeholder"}${stakeholderLead.title ? ` (${stakeholderLead.title})` : ""} in the alignment path and validate the decision-maker notes before using them as facts.`
-      : " Capture stakeholder owners before the project handoff so follow-on answers stay audience-aware.";
-
-    if (role === "PM") {
-      return `Start with a two-week discovery sprint for ${customerName}: confirm stakeholders, validate the ${selectedPillars[0]?.toLowerCase() || "top"} risk, capture current-state architecture, and publish a decision log. Track owners for security, data, app dependencies, and executive success criteria.${stakeholderContext}`;
-    }
-
-    if (role === "Solutions Architect") {
-      return `Start from the approved business case for ${customerName}, then translate each desired outcome into architecture evidence and a discovery question. Validate the current-state topology, identity and data boundaries, failure modes, RTO/RPO, compliance scope, observability ownership, cost constraints, and the rank 1 ${selectedPillars[0]?.toLowerCase() || "priority"} risk before naming a target pattern. Treat every generated architecture statement as an unvalidated hypothesis until the customer provides an artifact or owner confirmation. Recommend AWS services only when they directly support a customer decision, and close with the evidence, owner, timing, and decision gate for the next technical session.${stakeholderContext}`;
-    }
-    if (role === "Engineer") {
-      return `Begin with the narrow technical spine: ingestion path, identity model, API boundary, data store, and observability. Use the final pre-brief assumptions as hypotheses, then validate them before committing to architecture.${stakeholderContext}`;
-    }
-
-    if (role === "Executive") {
-      return `${customerName} needs a controlled modernization path. The business case is reduced delivery risk, better visibility into cost and reliability, and faster movement on high-value customer-facing work.${stakeholderContext}`;
-    }
-
-    if (role === "Sales") {
-      return `Lead the follow-up with the outcome they cared about most: ${industryFocus}. Keep it short, confirm what we heard, and propose a focused working session that turns the brief into an implementation plan.${stakeholderContext}`;
-    }
-
-    return `This project started as an SA pre-brief for ${customerName}. The final brief, decision-maker context, meeting notes, assumptions, risks, and decisions become the source of truth for anyone joining later.`;
-  }, [company, industryFocus, role, selectedPillars, usableDecisionMakers]);
-
-  const currentProjectAnswerKey = `${role}::${activePrompt}`;
-  const displayedProjectAnswer = isGenerating
-    ? ""
-    : projectBrainAnswer && projectAnswerKey === currentProjectAnswerKey
-      ? projectBrainAnswer
-      : projectAnswer;
+    : "";
+  const isProjectGenerating = isGenerating && generationStageMode === "project";
+  const displayedProjectAnswer = approved && promoted && !isProjectGenerating
+    ? handoffAnswerFor(generatedBrief, {
+        company,
+        clientId: pipelineClientIdentifier(company),
+        projectId: pipelineClientIdentifier(company),
+        packetVersion: currentPacketVersion(),
+        audienceRole: role,
+        focus: activePrompt,
+      })
+    : "";
   const handoffPacketText = (() => {
     const metadata = generatedBrief?.metadata;
     const sources = generatedBrief?.sourceCatalog?.map((source) => source.title) ?? [];
@@ -2428,6 +2406,7 @@ const industryFocus = useMemo(() => {
   }
 
   function loadScenario(nextScenario: Scenario) {
+    cancelPacketRequest();
     setScenarioId(nextScenario.id);
     setCompany(nextScenario.company);
     setIndustry(nextScenario.industry);
@@ -2449,8 +2428,6 @@ const industryFocus = useMemo(() => {
     setActiveTab("businessCase");
     setReviewMode("clean");
     setGeneratedBrief(null);
-    setProjectBrainAnswer("");
-    setProjectAnswerKey("");
     setGenerationError("");
     setGenerationNotice("");
     setSelectedHistoryId(null);
@@ -2463,6 +2440,7 @@ const industryFocus = useMemo(() => {
   }
 
   function startCustomScenario() {
+    cancelPacketRequest();
     setScenarioId("custom");
     setCompany("");
     setIndustry("Other");
@@ -2492,8 +2470,6 @@ const industryFocus = useMemo(() => {
     setActiveTab("businessCase");
     setReviewMode("clean");
     setGeneratedBrief(null);
-    setProjectBrainAnswer("");
-    setProjectAnswerKey("");
     setGenerationError("");
     setGenerationNotice("Custom scenario mode is ready. Add the customer context, then generate a fresh packet.");
     setSelectedHistoryId(null);
@@ -2938,6 +2914,7 @@ const industryFocus = useMemo(() => {
   }
 
   function loadBriefHistoryEntry(entry: BriefHistoryEntry) {
+    cancelPacketRequest();
     const matchedScenario = scenarios.find(
       (scenario) =>
         scenario.id === entry.scenarioId ||
@@ -2983,8 +2960,12 @@ const industryFocus = useMemo(() => {
     setApproved(entry.approved);
     setPromoted(entry.promoted);
     setGeneratedBrief(entry.generatedBrief);
-    setProjectBrainAnswer(entry.generatedBrief.projectAnswer || "");
-    setProjectAnswerKey(`${role}::${activePrompt}`);
+    const savedRole = entry.generatedBrief.metadata?.handoffAudienceRole as AudienceRole | undefined;
+    const savedFocus = entry.generatedBrief.metadata?.handoffFocus;
+    if (savedRole && rolePrompts[savedRole] && savedFocus) {
+      setRole(savedRole);
+      setActivePrompt(savedFocus);
+    }
     setSelectedHistoryId(entry.id);
     setGenerationError("");
     setGenerationNotice("");
@@ -3036,6 +3017,18 @@ const industryFocus = useMemo(() => {
     loadScenario(scenarios[0]);
   }
 
+  function cancelPacketRequest() {
+    packetRequestEpochRef.current += 1;
+    pipelineAbortRef.current?.abort(new DOMException("The selected packet changed.", "AbortError"));
+    pipelineAbortRef.current = null;
+    generationRequestRef.current = false;
+    setPipelineJobStatus(null);
+    setIsGenerating(false);
+    setRefiningTarget(null);
+    setPrecallHandoffStatus("idle");
+    setPrecallHandoffError("");
+  }
+
   async function requestBrief(
     mode: "prebrief" | "project" = "prebrief",
     options: { forceNew?: boolean } = {}
@@ -3050,9 +3043,13 @@ const industryFocus = useMemo(() => {
       setActivePage("brief");
       return;
     }
+    if (mode === "project" && pendingIntakeChanges) {
+      setGenerationError("The customer inputs have changed. Update the brief before building its handoff.");
+      return;
+    }
     const requestRole = role;
     const requestPrompt = activePrompt;
-    const requestProjectAnswerKey = `${requestRole}::${requestPrompt}`;
+    const requestEpoch = packetRequestEpochRef.current;
     const approvedBrief = buildApprovedBriefSnapshot(generatedBrief);
     const isRefinement = mode === "prebrief" && Boolean(generatedBrief) && !options.forceNew;
     const requestRefinementTarget = isRefinement ? activeTab : undefined;
@@ -3116,8 +3113,6 @@ const industryFocus = useMemo(() => {
 
     if (!preserveExistingOutput) {
       setGeneratedBrief(null);
-      setProjectBrainAnswer("");
-      setProjectAnswerKey("");
       setPromoted(false);
       setApproved(approvalTransition.approved);
       setApprovalStale(approvalTransition.stale);
@@ -3155,6 +3150,7 @@ const industryFocus = useMemo(() => {
                 setPipelineJobStatus(activePipelineStatus(status)),
             }
           );
+          if (controller.signal.aborted || requestEpoch !== packetRequestEpochRef.current) return;
           setGenerationMode("live");
         } catch (liveError) {
           if (!isPublicDemoAccessError(liveError)) {
@@ -3169,6 +3165,8 @@ const industryFocus = useMemo(() => {
         nextBrief = fallbackBriefForRequest(briefRequest);
         setGenerationMode("demo");
       }
+
+      if (controller.signal.aborted || requestEpoch !== packetRequestEpochRef.current) return;
 
       let refinementComparison = null;
       if (requestRefinementTarget && generatedBrief) {
@@ -3210,14 +3208,14 @@ const industryFocus = useMemo(() => {
       }
 
       if (mode === "project") {
-        nextBrief = {
-          ...nextBrief,
-          metadata: {
-            ...nextBrief.metadata,
-            precallHandoffStatus: "ready",
-            precallHandoffSourceVersion: requestBaseVersion,
-          },
-        };
+        nextBrief = mergeHandoffPacket(generatedBrief!, nextBrief, {
+          company,
+          clientId: pipelineClientIdentifier(company),
+          projectId: pipelineClientIdentifier(company),
+          packetVersion: requestBaseVersion,
+          audienceRole: requestRole,
+          focus: requestPrompt,
+        });
         setPrecallHandoffStatus("ready");
         setPrecallHandoffError("");
       }
@@ -3252,8 +3250,6 @@ const industryFocus = useMemo(() => {
         nextAppliedDrafts
       );
       setAppliedRefinementDrafts(nextAppliedDrafts);
-      setProjectBrainAnswer(nextBrief.projectAnswer || projectAnswer);
-      setProjectAnswerKey(requestProjectAnswerKey);
       setPromoted(nextPromoted);
 
       if (mode === "project") {
@@ -3265,6 +3261,7 @@ const industryFocus = useMemo(() => {
         setApprovalStale(Boolean(requestRefinementTarget));
       }
     } catch (error) {
+      if (requestEpoch !== packetRequestEpochRef.current) return;
       if (error instanceof DOMException && error.name === "AbortError") {
         setGenerationNotice("The AI request was cancelled. Your current packet was preserved.");
         if (mode === "project") {
@@ -3281,11 +3278,11 @@ const industryFocus = useMemo(() => {
     } finally {
       if (pipelineAbortRef.current === controller) {
         pipelineAbortRef.current = null;
+        generationRequestRef.current = false;
+        setPipelineJobStatus(null);
+        setIsGenerating(false);
+        setRefiningTarget(null);
       }
-      generationRequestRef.current = false;
-      setPipelineJobStatus(null);
-      setIsGenerating(false);
-      setRefiningTarget(null);
     }
   }
 
@@ -3315,6 +3312,7 @@ const industryFocus = useMemo(() => {
         return;
       }
       generationRequestRef.current = true;
+      const requestEpoch = packetRequestEpochRef.current;
       const controller = new AbortController();
       pipelineAbortRef.current = controller;
       setPipelineJobStatus("queued");
@@ -3335,6 +3333,7 @@ const industryFocus = useMemo(() => {
               setPipelineJobStatus(activePipelineStatus(status)),
           }
         );
+        if (controller.signal.aborted || requestEpoch !== packetRequestEpochRef.current) return;
         setGeneratedBrief(approvedBrief);
         setBriefVersion(approvedBrief.metadata?.packetVersion || briefVersion);
         setApproved(true);
@@ -3354,6 +3353,7 @@ const industryFocus = useMemo(() => {
           "Approved for the meeting. Build the pre-call handoff when the team is ready."
         );
       } catch (error) {
+        if (requestEpoch !== packetRequestEpochRef.current) return;
         if (error instanceof DOMException && error.name === "AbortError") {
           setGenerationNotice("Approval was cancelled. The draft remains unchanged.");
         } else {
@@ -3366,10 +3366,10 @@ const industryFocus = useMemo(() => {
       } finally {
         if (pipelineAbortRef.current === controller) {
           pipelineAbortRef.current = null;
+          generationRequestRef.current = false;
+          setPipelineJobStatus(null);
+          setIsGenerating(false);
         }
-        generationRequestRef.current = false;
-        setPipelineJobStatus(null);
-        setIsGenerating(false);
       }
       return;
     }
@@ -3734,13 +3734,19 @@ const industryFocus = useMemo(() => {
           onStatus: setMeetingJobStatus,
         }
       );
-      const handoff = normalizeBriefResponse(rawHandoff, "agentcore");
+      if (controller.signal.aborted) return;
+      const handoff = mergeHandoffPacket(generatedBrief!, normalizeBriefResponse(rawHandoff, "agentcore"), {
+        company,
+        clientId: pipelineClientIdentifier(company),
+        projectId: pipelineClientIdentifier(company),
+        packetVersion: meetingResult.baseBriefVersion,
+        audienceRole: role,
+        focus: activePrompt,
+      });
       if (handoff.metadata?.fallbackUsed) {
         throw new Error("The approved handoff did not complete through AgentCore.");
       }
       setGeneratedBrief(handoff);
-      setProjectBrainAnswer(handoff.projectAnswer);
-      setProjectAnswerKey(`${role}::${activePrompt}`);
       setPromoted(true);
       setApproved(true);
       setApprovalStale(false);
@@ -5077,6 +5083,14 @@ const industryFocus = useMemo(() => {
 
               <div className="brief-workspace-main">
                 <div className="space-y-4">
+                  {generatedBrief && generationError ? (
+                    <p className="error-note" role="alert">{generationError}</p>
+                  ) : null}
+                  {pendingIntakeChanges ? (
+                    <p className="notice-note" role="status">
+                      Customer inputs have changed. The content and evidence assessment below belong to saved brief v{briefVersion} until you generate or refine it.
+                    </p>
+                  ) : null}
                   <div className="brief-review-primary">
                   <div
                     className={cx("brief-surface", isGenerating && (!refiningTarget || refiningTarget === activeTab) && "brief-surface-busy")}
@@ -5739,8 +5753,8 @@ const industryFocus = useMemo(() => {
                     </div>
 
                     <div
-                      className={cx("project-answer", isGenerating && "project-answer-busy")}
-                      aria-busy={isGenerating}
+                      className={cx("project-answer", isProjectGenerating && "project-answer-busy")}
+                      aria-busy={isProjectGenerating}
                     >
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div>
@@ -5760,19 +5774,20 @@ const industryFocus = useMemo(() => {
                                 : "project-state-waiting"
                             )}
                           >
-                            {handoffReady ? "Team handoff ready" : promoted ? "Handoff updating" : approved ? "Ready to generate" : "Handoff pending"}
+                            {displayedProjectAnswer ? "Team handoff ready" : isProjectGenerating ? "Preparing handoff" : approved ? "Ready to generate" : "Handoff pending"}
                           </span>
                           <button
                             className="copy-button copy-button-dark"
                             type="button"
                             onClick={copyFollowUpEmail}
+                            disabled={!displayedProjectAnswer || !followUpEmailText}
                           >
                             Copy email
                           </button>
                           <button
                             className="copy-button copy-button-dark"
                             type="button"
-                            disabled={!generatedBrief}
+                            disabled={!displayedProjectAnswer}
                             onClick={copyHandoffPacket}
                           >
                             Copy packet
@@ -5785,7 +5800,7 @@ const industryFocus = useMemo(() => {
                           ) : null}
                         </div>
                       </div>
-                      {isGenerating ? (
+                      {isProjectGenerating ? (
                         <div className="generation-status generation-status-dark">
                           <ProcessingIndicator label={activeProcessingLabel} tone="dark" />
                         </div>
@@ -5793,7 +5808,7 @@ const industryFocus = useMemo(() => {
                       <p className="mt-5 text-base leading-7 text-white/82">
                         {displayedProjectAnswer}
                       </p>
-                      {claimRecord("projectAnswer", 0) ? (
+                      {displayedProjectAnswer && claimRecord("projectAnswer", 0) ? (
                         <div className="project-answer-sources">
                           <span className={`claim-evidence-status claim-evidence-status-${claimRecord("projectAnswer", 0)?.evidenceStatus}`}>
                             {evidenceStatusLabel(claimRecord("projectAnswer", 0)?.evidenceStatus ?? "needs-validation")}
@@ -5808,7 +5823,7 @@ const industryFocus = useMemo(() => {
                             </button>
                           ))}
                         </div>
-                      ) : <div className="project-answer-sources"><span>Evidence not recorded</span></div>}
+                      ) : displayedProjectAnswer ? <div className="project-answer-sources"><span>Not assessed</span></div> : null}
                     </div>
 
                     {isNextStepFollowUp ? (

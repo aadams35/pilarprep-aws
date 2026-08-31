@@ -164,6 +164,42 @@ class RuntimeTests(unittest.TestCase):
             memory_factory=lambda _scope: nullcontext({"memory": "enabled"}),
         )
 
+    def test_handoff_preserves_brief_assessments_in_response_and_saved_packet(self):
+        payload = json.loads(json.dumps(HANDOFF_PAYLOAD))
+        approved = payload["approvedBrief"]
+        approved["sourceCatalog"] = [{
+            "sourceId": "src-approved-context",
+            "title": "Customer-approved BlueMesa scenario",
+            "evidenceSnippet": "The customer approved the bounded discovery scope.",
+        }]
+        approved["claims"] = [{
+            "claimId": "claim-approved-technical",
+            "section": "technical",
+            "itemIndex": 0,
+            "text": approved["technical"][0],
+            "sourceIds": ["src-approved-context"],
+            "evidenceStatus": "customer-provided",
+            "validationStatus": "supported-by-customer-context",
+            "evidenceSnippet": "The customer approved the bounded discovery scope.",
+        }]
+        approved["evidenceCoverage"] = {
+            "materialClaims": 1,
+            "claimsWithApprovedSources": 1,
+            "coveragePercent": 100,
+            "statusCounts": {"customer-provided": 1},
+            "meaning": "Coverage measures approved source linkage, not probability of truth.",
+        }
+        payload["briefRequest"]["approvedBrief"] = approved
+        with patch.dict(HANDOFF_PAYLOAD, {"approvedBrief": approved}):
+            result = self.invoke(payload)
+        persisted = next(args["packet"] for name, args in FakeGateway.calls if name == "create_handoff_packet")
+        for packet in (result, persisted):
+            for field in ("sourceCatalog", "claims", "evidenceCoverage"):
+                self.assertEqual(packet.get(field), approved[field], field)
+            self.assertEqual(packet["metadata"]["packetVersion"], 2)
+            self.assertEqual(packet["metadata"]["handoffAudienceRole"], payload["audienceRole"])
+            self.assertEqual(packet["metadata"]["handoffFocus"], payload["focus"])
+
     def test_handoff_reads_before_reasoning_then_performs_governed_writes(self):
         result = self.invoke(HANDOFF_PAYLOAD)
         names = [name for name, _arguments in FakeGateway.calls]

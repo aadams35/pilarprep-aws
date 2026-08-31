@@ -368,6 +368,8 @@ def _brief_snapshot(payload, field_name):
         "projectArtifacts": project_artifacts,
         "citations": _as_string_list(source.get("citations"))[:24],
         "evidence": [item for item in evidence if isinstance(item, dict)][:64],
+        "sourceCatalog": json.loads(json.dumps(source.get("sourceCatalog") or [])),
+        "claims": json.loads(json.dumps(source.get("claims") or [])),
     }
 
 
@@ -965,15 +967,51 @@ def _claim_status(section, item_index, text, source_matches):
 
 def _attach_provenance(generated, payload):
     catalog = _source_catalog(payload)
+    refinement = _refinement_context(payload)
+    target = refinement["refinementTarget"] if refinement["active"] else None
+    previous = refinement["previousBrief"] if target else {}
+    preserved_claims = [
+        json.loads(json.dumps(claim))
+        for claim in previous.get("claims", [])
+        if isinstance(claim, dict) and claim.get("section") != target
+    ]
+    preserved_ids = {source_id for claim in preserved_claims for source_id in claim.get("sourceIds", [])}
+    preserved_sources = [
+        json.loads(json.dumps(source))
+        for source in previous.get("sourceCatalog", [])
+        if isinstance(source, dict) and source.get("sourceId") in preserved_ids
+    ]
+    for source in preserved_sources:
+        if any(payload.get(field) and source.get(field) and payload[field] != source[field]
+               for field in ("tenantId", "clientId", "projectId")):
+            raise ValueError("Previous brief evidence is outside the current scope")
+    prior_by_id = {source["sourceId"]: source for source in preserved_sources}
+    for index, source in enumerate(catalog):
+        prior = prior_by_id.get(source["sourceId"])
+        if prior is None:
+            continue
+        identity_fields = ("tenantId", "clientId", "projectId", "sourceType", "sourceLocation", "evidenceSnippet", "approvedBy", "lifecycleStatus")
+        if all(prior.get(field) == source.get(field) for field in identity_fields):
+            catalog[index] = prior
+        else:
+            # Corrected context gets a new source ID; unchanged tabs retain their original evidence.
+            digest = hashlib.sha256(json.dumps({field: source.get(field) for field in identity_fields}, sort_keys=True).encode()).hexdigest()[:12]
+            source["sourceId"] = source["sourceId"][:60] + "-" + digest
     evidence_by_key = {
         (item.get("section"), item.get("itemIndex")): item
         for item in generated.get("evidence", [])
         if isinstance(item, dict)
     }
     ignored_terms = _evidence_terms(payload.get("company"))
-    claims = []
-    resolved_evidence = []
+    claims = preserved_claims
+    resolved_evidence = [
+        json.loads(json.dumps(item))
+        for item in previous.get("evidence", [])
+        if isinstance(item, dict) and item.get("section") != target
+    ]
     for section, item_index, text in _claim_text_rows(generated):
+        if target and section != target:
+            continue
         evidence = evidence_by_key.get((section, item_index), {})
         source_matches = _supporting_source_rows(
             text,
@@ -1025,6 +1063,7 @@ def _attach_provenance(generated, payload):
                 "validationStatus": validation_status,
             }
         )
+    catalog = list({row["sourceId"]: row for row in preserved_sources + catalog}.values())
     known_ids = {row["sourceId"] for row in catalog}
     if any(
         source_id not in known_ids

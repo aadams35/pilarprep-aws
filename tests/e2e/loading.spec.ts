@@ -382,6 +382,8 @@ test("live job keeps the workspace responsive with an in-app clock", async ({ pa
 });
 
 test("approval waits for an explicit pre-call handoff action", async ({ page }) => {
+  let releaseHandoff: () => void = () => {};
+  const handoffGate = new Promise<void>((resolve) => { releaseHandoff = resolve; });
   const submittedActions: Array<{
     action?: string;
     input?: { packetVersion?: number };
@@ -400,6 +402,10 @@ test("approval waits for an explicit pre-call handoff action", async ({ page }) 
   const handoffBrief = {
     ...approvedBrief,
     provider: "agentcore",
+    projectAnswer: "The completed handoff assigns payroll evidence owners and the next customer decision.",
+    sourceCatalog: undefined,
+    claims: undefined,
+    evidenceCoverage: undefined,
     projectArtifacts: {
       twoWeekPlan: [
         {
@@ -488,6 +494,7 @@ test("approval waits for an explicit pre-call handoff action", async ({ page }) 
 
     const approval = path.endsWith("/job-approve-v1");
     const handoff = path.endsWith("/job-handoff-v1");
+    if (handoff) await handoffGate;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -521,12 +528,18 @@ test("approval waits for an explicit pre-call handoff action", async ({ page }) 
     name: "Build pre-call handoff",
   });
   await expect(buildHandoff).toBeEnabled();
+  await expect(page.locator(".project-answer > p")).toHaveText("");
   expect(submittedActions.map((request) => request.action)).toEqual([
     "brief.generate",
     "brief.approve",
   ]);
   expect(submittedActions[1]?.input?.packetVersion).toBe(1);
   await buildHandoff.click();
+  await expect(page.locator(".project-answer")).toHaveAttribute("aria-busy", "true");
+  await expect(page.locator(".project-answer > p")).toHaveText("");
+  await expect(page.locator(".handoff-ready-action-primary")).toBeDisabled();
+  await expect(page.locator(".project-answer [role=status]")).toContainText(/Queued|handoff/);
+  releaseHandoff();
   await expect(
     page.getByText("The shared handoff is ready for the call team.")
   ).toBeVisible();
@@ -535,6 +548,119 @@ test("approval waits for an explicit pre-call handoff action", async ({ page }) 
     "brief.approve",
     "handoff.generate",
   ]);
+  await expect(page.locator(".project-answer > p")).toHaveText(handoffBrief.projectAnswer);
+  await page.getByRole("button", { name: /Discovery/ }).first().click();
+  await expect(page.getByText("100% linked", { exact: true })).toBeVisible();
+  await page.getByRole("textbox", { name: "Additional technical context" }).fill("Confirm payroll interface ownership.");
+  await expect(page.getByText("100% linked", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("textbox", { name: "Additional technical context" })).toHaveValue("Confirm payroll interface ownership.");
+  await expect(page.getByText("100% linked", { exact: true })).toBeVisible();
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("pillarprep.workspace.v2") || "{}"));
+  expect(saved.generatedBrief.claims).toEqual(completedBrief.claims);
+  expect(saved.generatedBrief.sourceCatalog).toEqual(completedBrief.sourceCatalog);
+  expect(saved.generatedBrief.metadata.packetVersion).toBe(2);
+  await page.getByRole("button", { name: /^4\. Meet\./ }).click();
+  await expect(page.locator(".project-answer > p")).toHaveText(handoffBrief.projectAnswer);
+  expect(submittedActions.filter((request) => request.action === "handoff.generate")).toHaveLength(1);
+});
+
+test("refinement failure preserves confidence and success updates only the selected tab", async ({ page }) => {
+  let refinementAttempts = 0;
+  const revisedTechnical = completedBrief.technical.map((text) => "Revised payroll discovery: " + text);
+  const revisedClaim = {
+    claimId: "claim-revised-technical", section: "technical", itemIndex: 0,
+    text: revisedTechnical[0], sourceIds: [], evidenceStatus: "needs-validation",
+    evidenceSnippet: "Payroll interface ownership requires customer validation.",
+    validationStatus: "unsupported-no-matching-source",
+  };
+  await page.route("https://test.execute-api.us-east-1.amazonaws.com/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path === "/clients") {
+      await route.fulfill({ json: { clients: [] } });
+      return;
+    }
+    if (request.method() === "POST") {
+      const payload = request.postDataJSON();
+      if (payload.action === "brief.refine") {
+        refinementAttempts += 1;
+        expect(payload.input.refinementTarget).toBe("technical");
+        expect(payload.input.baseBriefVersion).toBe(1);
+      }
+      await route.fulfill({ status: 202, json: {
+        jobId: payload.action === "brief.refine" ? `refine-${refinementAttempts}` : "generate-first",
+        clientId: "apex-mutual", projectId: "apex-mutual", status: "queued", pollAfterMs: 10,
+      } });
+      return;
+    }
+    const jobId = path.split("/").at(-1);
+    const refined = jobId === "refine-2";
+    await route.fulfill({ json: {
+      jobId, clientId: "apex-mutual", projectId: "apex-mutual",
+      status: jobId === "refine-1" ? "failed" : "complete",
+      error: jobId === "refine-1" ? "Refinement failed before saving. Your previous packet is intact." : undefined,
+      result: refined ? {
+        ...completedBrief, technical: revisedTechnical,
+        claims: [...completedBrief.claims, revisedClaim],
+        evidenceCoverage: { materialClaims: 2, claimsWithApprovedSources: 1, coveragePercent: 50, statusCounts: { "customer-provided": 1, "needs-validation": 1 } },
+        metadata: { ...completedBrief.metadata, packetVersion: 2, baseBriefVersion: 1, refinementTarget: "technical", refinementIsolationPassed: true, approvalStatus: "stale" },
+      } : completedBrief,
+    } });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /Generate AI prebrief/i }).click();
+  await expect(page.getByText("100% linked", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /Discovery/ }).first().click();
+  await page.getByRole("textbox", { name: "Additional technical context" }).fill("Confirm payroll interfaces and ownership.");
+  const apply = page.locator("#brief-refine-section").getByRole("button", { name: /Apply.*feedback/i });
+  await apply.click();
+  await expect(page.getByText("Refinement failed before saving. Your previous packet is intact.")).toBeVisible();
+  await expect(page.getByText("100% linked", { exact: true })).toBeVisible();
+  await expect(page.getByText(completedBrief.technical[0], { exact: true })).toBeVisible();
+  await apply.click();
+  await expect(page.getByText("50% linked", { exact: true })).toBeVisible();
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("pillarprep.workspace.v2") || "{}"));
+  expect(saved.generatedBrief.technical).toEqual(revisedTechnical);
+  for (const section of ["businessCase", "executive", "stakeholders", "gameplan", "objections"] as const) {
+    expect(saved.generatedBrief[section]).toEqual(completedBrief[section]);
+  }
+  expect(saved.generatedBrief.claims[0]).toEqual(completedBrief.claims[0]);
+  expect(saved.generatedBrief.claims[1]).toEqual(revisedClaim);
+  expect(saved.approved).toBe(false);
+  expect(saved.approvalStale).toBe(true);
+  await page.reload();
+  await expect(page.getByText("50% linked", { exact: true })).toBeVisible();
+});
+
+test("late generation cannot replace a different selected customer", async ({ page }) => {
+  let release: () => void = () => {};
+  const delayed = new Promise<void>((resolve) => { release = resolve; });
+  let polled = false;
+  await page.route("https://test.execute-api.us-east-1.amazonaws.com/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path === "/clients") {
+      await route.fulfill({ json: { clients: [] } });
+    } else if (request.method() === "POST") {
+      await route.fulfill({ status: 202, json: { jobId: "old-customer-job", clientId: "apex-mutual", projectId: "apex-mutual", status: "queued", pollAfterMs: 10 } });
+    } else {
+      polled = true;
+      await delayed;
+      await route.fulfill({ json: { jobId: "old-customer-job", clientId: "apex-mutual", projectId: "apex-mutual", status: "complete", result: completedBrief } }).catch(() => {});
+    }
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /Generate AI prebrief/i }).click();
+  await expect.poll(() => polled).toBe(true);
+  await page.getByRole("button", { name: "Open PilarPrep context" }).click();
+  await page.getByRole("button", { name: /BlueMesa Payments/ }).click();
+  release();
+  await expect(page.getByRole("textbox", { name: "Company name" })).toHaveValue("BlueMesa Payments");
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("pillarprep.workspace.v2") || "{}"));
+  expect(saved.generatedBrief).toBeNull();
+  expect(saved.company).toBe("BlueMesa Payments");
+  expect(saved.briefHistory).toEqual([]);
 });
 
 test("claim citations open an accessible authorized evidence drawer", async ({ page }) => {

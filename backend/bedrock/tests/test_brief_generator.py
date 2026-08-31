@@ -410,6 +410,57 @@ class LambdaHandlerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unapproved source label"):
             app._normalize_generated(generated, VALID_PAYLOAD)
 
+    def test_refinement_preserves_non_target_assessments_and_original_sources(self):
+        previous = app._normalize_generated(json.loads(MODEL_RESPONSE), VALID_PAYLOAD)
+        original = json.loads(json.dumps(previous))
+        payload = {
+            **VALID_PAYLOAD,
+            "mode": "prebrief",
+            "previousBrief": previous,
+            "baseBriefVersion": 3,
+            "refinementTarget": "technical",
+            "feedback": ["Add stronger technical depth"],
+            "context": "The customer has confirmed payroll integration on its existing AWS platform.",
+        }
+        result = app._normalize_generated({
+            "technical": [f"{MODEL_TECHNICAL} Revised discovery item {index}." for index in range(4)],
+            "citations": ["Customer context"],
+        }, payload)
+        previous_claims = [claim for claim in previous["claims"] if claim["section"] != "technical"]
+        self.assertEqual([claim for claim in result["claims"] if claim["section"] != "technical"], previous_claims)
+        source_by_id = {source["sourceId"]: source for source in result["sourceCatalog"]}
+        prior_by_id = {source["sourceId"]: source for source in previous["sourceCatalog"]}
+        for claim in previous_claims:
+            for source_id in claim["sourceIds"]:
+                self.assertEqual(source_by_id[source_id], prior_by_id[source_id])
+        for claim in result["claims"]:
+            if claim["section"] == "technical":
+                self.assertIn("Revised discovery item", claim["text"])
+            self.assertTrue(set(claim["sourceIds"]).issubset(source_by_id))
+        self.assertEqual(result["evidenceCoverage"]["materialClaims"], len(result["claims"]))
+        self.assertEqual(sum(result["evidenceCoverage"]["statusCounts"].values()), len(result["claims"]))
+        self.assertEqual(previous, original)
+
+    def test_legacy_refinement_does_not_invent_assessments_for_unchanged_tabs(self):
+        previous = json.loads(MODEL_RESPONSE)
+        result = app._normalize_generated({
+            "technical": [f"{MODEL_TECHNICAL} Revised item {index}." for index in range(4)],
+            "citations": [],
+        }, {**VALID_PAYLOAD, "mode": "prebrief", "previousBrief": previous,
+            "baseBriefVersion": 1, "refinementTarget": "technical", "feedback": ["Add technical depth"]})
+        self.assertEqual({claim["section"] for claim in result["claims"]}, {"technical"})
+
+    def test_refinement_rejects_prior_evidence_from_another_client(self):
+        payload = {**VALID_PAYLOAD, "tenantId": "tenant-one", "clientId": "apex-mutual", "projectId": "apex-mutual"}
+        previous = app._normalize_generated(json.loads(MODEL_RESPONSE), payload)
+        previous["sourceCatalog"].append({"sourceId": "src-foreign", "clientId": "other-client"})
+        previous["claims"].append({"section": "executive", "itemIndex": 0, "sourceIds": ["src-foreign"]})
+        with self.assertRaisesRegex(ValueError, "outside the current scope"):
+            app._normalize_generated({"technical": [MODEL_TECHNICAL] * 4}, {
+                **payload, "mode": "prebrief", "previousBrief": previous,
+                "baseBriefVersion": 1, "refinementTarget": "technical", "feedback": ["Add technical depth"],
+            })
+
     def test_estimates_usage_when_bedrock_does_not_report_tokens(self):
         response = self.invoke(VALID_PAYLOAD)
         metadata = response["json"]["metadata"]
