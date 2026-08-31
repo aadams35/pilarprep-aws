@@ -43,6 +43,8 @@ The code has limits on replay and separates retryable failures from non-retryabl
 
 ## Observability
 
+See [Multi-user operation and scaling](scaling.md) for account headroom, the configurable SQS worker limit, concurrent-user checks, alert thresholds, and capacity rollback.
+
 The templates configure CloudWatch logs, metrics, alarms, tracing, and notification resources. Not all resources appear in the simplified path diagram. Deployment-specific outputs and CloudFormation parameters are authoritative; do not assume every optional email subscription is confirmed.
 
 Useful indicators include queue age, failures by action, generation latency, model routing, estimated token cost, cross-scope attempts, RAG retrieval failures, clean scans, and transcription continuation events. An application's token-cost estimate is not the complete AWS bill.

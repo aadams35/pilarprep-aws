@@ -2874,19 +2874,21 @@ class WorkerTests(unittest.TestCase):
             ],
         )
 
-    def test_catchup_is_grounded_and_read_only(self):
+    def test_catchup_is_read_only_while_another_user_updates_the_project(self):
         runtime_calls = []
+        shared_project = {"version": 7}
 
         class FakeAgentCore:
             def invoke_agent_runtime(self, **kwargs):
                 runtime_calls.append(kwargs)
+                shared_project["version"] += 1
                 return {
                     "response": BytesIO(
                         json.dumps(
                             {
                                 "provider": "agentcore",
                                 "answer": "Role-aware approved-packet catch-up.",
-                                "metadata": {},
+                                "metadata": {"toolCalls": ["get_latest_brief", "get_project_state", "generate_catchup"]},
                             }
                         ).encode("utf-8")
                     )
@@ -2912,9 +2914,8 @@ class WorkerTests(unittest.TestCase):
         with (
             patch.object(worker, "AGENT_RUNTIME_ARN", "runtime-arn"),
             patch.object(worker, "_approved_document", return_value=approved),
-            patch.object(worker, "_project_state_version", side_effect=[7, 7]),
             patch.object(worker, "_scope_token", return_value="signed-scope"),
-            patch.object(worker, "aws_client", return_value=FakeAgentCore()),
+            patch.object(worker, "aws_client", return_value=FakeAgentCore()) as clients,
         ):
             result = worker._run_agent(SCOPE, document)
 
@@ -2924,13 +2925,15 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(payload["approvedBrief"]["technical"], ["Approved evidence"])
         self.assertEqual(result["provider"], "agentcore")
         self.assertEqual(result["metadata"]["approvedPacketVersion"], 4)
+        self.assertEqual(shared_project["version"], 8)
+        clients.assert_called_once_with("bedrock-agentcore")
 
-    def test_catchup_rejects_any_project_state_mutation(self):
+    def test_catchup_rejects_write_capable_tool_trace(self):
         class FakeAgentCore:
             def invoke_agent_runtime(self, **_kwargs):
                 return {
                     "response": BytesIO(
-                        b'{"provider":"agentcore","answer":"catch-up","metadata":{}}'
+                        b'{"provider":"agentcore","answer":"catch-up","metadata":{"toolCalls":["save_project_update"]}}'
                     )
                 }
 
@@ -2946,11 +2949,10 @@ class WorkerTests(unittest.TestCase):
         with (
             patch.object(worker, "AGENT_RUNTIME_ARN", "runtime-arn"),
             patch.object(worker, "_approved_document", return_value=approved),
-            patch.object(worker, "_project_state_version", side_effect=[2, 3]),
             patch.object(worker, "_scope_token", return_value="signed-scope"),
             patch.object(worker, "aws_client", return_value=FakeAgentCore()),
         ):
-            with self.assertRaisesRegex(RuntimeError, "changed project state"):
+            with self.assertRaisesRegex(RuntimeError, "write-capable"):
                 worker._run_agent(SCOPE, document)
 
     def test_agent_jobs_share_memory_but_use_isolated_runtime_sessions(self):
@@ -2980,7 +2982,6 @@ class WorkerTests(unittest.TestCase):
         with (
             patch.object(worker, "AGENT_RUNTIME_ARN", "runtime-arn"),
             patch.object(worker, "_approved_document", return_value=approved),
-            patch.object(worker, "_project_state_version", return_value=7),
             patch.object(worker, "_scope_token", return_value="signed-scope"),
             patch.object(worker, "aws_client", return_value=FakeAgentCore()),
         ):

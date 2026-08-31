@@ -368,9 +368,10 @@ def _load_input(
 
 
 def _purge_noncurrent_versions(
-    s3: Any, prefix: str, keep_versions: set[tuple[str, str]]
+    s3: Any, prefix: str, keep_versions: set[tuple[str, str]], *, target_keys: set[str] | None = None
 ) -> None:
-    target_keys = {key for key, _version_id in keep_versions}
+    if target_keys is None:
+        target_keys = {key for key, _version_id in keep_versions}
     key_marker: str | None = None
     version_marker: str | None = None
     while True:
@@ -393,14 +394,34 @@ def _purge_noncurrent_versions(
             and (item["Key"], item["VersionId"]) not in keep_versions
         ]
         if objects:
-            s3.delete_objects(
+            deleted = s3.delete_objects(
                 Bucket=ARTIFACT_BUCKET,
                 Delete={"Objects": objects, "Quiet": True},
-            )
+            ) or {}
+            if deleted.get("Errors"):
+                raise RuntimeError("Some superseded artifact versions could not be deleted")
         if not page.get("IsTruncated"):
             return
         key_marker = page.get("NextKeyMarker")
         version_marker = page.get("NextVersionIdMarker")
+
+
+def _cleanup_replaced_artifacts(scope: Mapping[str, str], old_keys: list[str], keep_keys: set[str]) -> None:
+    obsolete = {key for key in old_keys if key and key not in keep_keys}
+    if not obsolete:
+        return
+    root = project_artifact_prefix(scope)
+    allowed = (f"{root}/brief/draft/", f"{root}/handoff/")
+    try:
+        if any(not key.startswith(allowed) or not key.endswith(("/latest.json", "/latest.docx")) for key in obsolete):
+            raise ValueError("Artifact cleanup is outside the mutable packet scope")
+        s3 = aws_client("s3")
+        for key in obsolete:
+            _purge_noncurrent_versions(s3, key, set(), target_keys={key})
+    except Exception:
+        # Persistence has already committed; cleanup must never turn that success into a retry.
+        LOGGER.warning("Superseded artifact cleanup needs attention")
+        metric("ArtifactCleanupFailures")
 
 
 def _artifact_download_filename(company: object, artifact_type: str, version: object) -> str:
@@ -624,7 +645,8 @@ def _write_brief_draft(
     generated_metadata["packetVersion"] = packet_version
 
     timestamp = now_iso()
-    prefix = f"{project_artifact_prefix(scope)}/brief/draft/"
+    # Competing writes must not share objects before the conditional latest-pointer update.
+    prefix = f"{project_artifact_prefix(scope)}/brief/draft/{require_identifier(job_id, 'jobId')}/{uuid4().hex}/"
     stored_request = {
         key: value
         for key, value in payload.items()
@@ -689,6 +711,7 @@ def _write_brief_draft(
             "sourceJobId = :jobId, precallHandoffStatus = :precallStatus"
         ),
         "ExpressionAttributeValues": values,
+        "ReturnValues": "ALL_OLD",
     }
     if action == "brief.generate":
         if current_packet_version is None:
@@ -702,9 +725,10 @@ def _write_brief_draft(
         )
         values[":baseVersion"] = {"N": str(payload.get("baseBriefVersion"))}
     try:
-        aws_client("dynamodb").update_item(**request)
+        saved = aws_client("dynamodb").update_item(**request) or {}
     except ClientError as exc:
         if _client_error_code(exc) == "ConditionalCheckFailedException":
+            _cleanup_replaced_artifacts(scope, [artifact_key, docx_key], set())
             if action == "brief.refine":
                 message = (
                     "The brief changed before refinement; reload the latest packet "
@@ -717,6 +741,8 @@ def _write_brief_draft(
                 )
             raise NonRetryableJobError(message) from exc
         raise
+    previous = deserialize_item(saved.get("Attributes"))
+    _cleanup_replaced_artifacts(scope, [str(previous.get("draftArtifactKey") or ""), str(previous.get("draftDocxArtifactKey") or "")], {artifact_key, docx_key})
     generated.setdefault("metadata", {}).update(
         {
             "projectId": scope["projectId"],
@@ -1251,24 +1277,6 @@ def _read_runtime_response(response: Mapping[str, Any]) -> dict[str, Any]:
     return parsed
 
 
-def _project_state_version(scope: Mapping[str, str]) -> int:
-    item = aws_client("dynamodb").get_item(
-        TableName=PROJECT_TABLE,
-        Key={
-            "projectId": {"S": project_partition_key(scope)},
-            "sortKey": {"S": "PROJECT#STATE"},
-        },
-        ConsistentRead=True,
-        ProjectionExpression="#version",
-        ExpressionAttributeNames={"#version": "version"},
-    ).get("Item")
-    return (
-        int(item.get("version", {}).get("N", "0"))
-        if isinstance(item, Mapping)
-        else 0
-    )
-
-
 def _approved_document(
     scope: Mapping[str, str], *, require_current: bool
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1386,7 +1394,6 @@ def _run_agent(
     if not isinstance(screened_payload, Mapping):
         raise NonRetryableJobError("The normalized agent input is invalid")
     runtime_payload = dict(screened_payload)
-    before_version = _project_state_version(scope)
     runtime_response = aws_client("bedrock-agentcore").invoke_agent_runtime(
         agentRuntimeArn=AGENT_RUNTIME_ARN,
         runtimeSessionId=runtime_session_id,
@@ -1424,41 +1431,19 @@ def _run_agent(
             },
         }
     )
-    after_version = _project_state_version(scope)
-    if pipeline_action == "catchup.generate" and after_version != before_version:
-        raise RuntimeError("Read-only catch-up changed project state")
+    if pipeline_action == "catchup.generate":
+        # Other users can legitimately advance project state during this read-only request.
+        read_tools = {"get_latest_brief", "get_project_state", "retrieve_authorized_evidence", "generate_catchup"}
+        used_tools = result.get("metadata", {}).get("toolCalls", [])
+        if not isinstance(used_tools, list) or any(not isinstance(tool, str) or tool not in read_tools for tool in used_tools):
+            raise RuntimeError("Read-only catch-up reported a write-capable or unknown tool")
     if pipeline_action == "handoff.generate":
         metadata = (
             result.get("metadata")
             if isinstance(result.get("metadata"), Mapping)
             else {}
         )
-        timestamp = now_iso()
-        handoff_item = {
-            "projectId": {"S": project_partition_key(scope)},
-            "sortKey": {"S": "HANDOFF#LATEST"},
-            "entityType": {"S": "HANDOFF_LATEST"},
-            "company": {"S": str(latest.get("company") or "")},
-            "artifactKey": {"S": str(metadata.get("artifactKey") or "")},
-            "docxArtifactKey": {
-                "S": str(metadata.get("docxArtifactKey") or "")
-            },
-            "updatedAt": {"S": timestamp},
-            "sourceBriefVersion": {
-                "N": str(latest.get("approvedPacketVersion") or 0)
-            },
-            "provider": {"S": "agentcore"},
-        }
-        aws_client("dynamodb").put_item(
-            TableName=PROJECT_TABLE, Item=handoff_item
-        )
-        _upsert_client_directory(
-            scope,
-            handoff={
-                "updatedAt": timestamp,
-                "artifactKey": metadata.get("artifactKey"),
-            },
-        )
+        _record_latest_handoff(scope, latest, metadata, assembly="agentcore")
     return result
 
 
@@ -1660,7 +1645,7 @@ def _record_latest_handoff(
     assembly: str,
 ) -> None:
     timestamp = now_iso()
-    aws_client("dynamodb").put_item(
+    replaced = aws_client("dynamodb").put_item(
         TableName=PROJECT_TABLE,
         Item={
             "projectId": {"S": project_partition_key(scope)},
@@ -1678,7 +1663,10 @@ def _record_latest_handoff(
             "provider": {"S": "agentcore"},
             "assembly": {"S": assembly},
         },
-    )
+        ReturnValues="ALL_OLD",
+    ) or {}
+    previous = deserialize_item(replaced.get("Attributes"))
+    _cleanup_replaced_artifacts(scope, [str(previous.get("artifactKey") or ""), str(previous.get("docxArtifactKey") or "")], {str(metadata.get("artifactKey") or ""), str(metadata.get("docxArtifactKey") or "")})
     _upsert_client_directory(
         scope,
         handoff={

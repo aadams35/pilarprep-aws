@@ -515,7 +515,7 @@ class ToolTests(unittest.TestCase):
         with (
             patch.object(app, "ARTIFACT_BUCKET", "private-artifacts"),
             patch.object(app, "PROJECT_TABLE", "project-table"),
-            patch.object(app, "_idempotency_exists", return_value=False),
+            patch.object(app, "_idempotency_record", return_value={}),
             patch.object(app, "_client", side_effect=fake_client),
         ):
             result = app.create_handoff_packet(
@@ -530,11 +530,41 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(
             {(item["Key"], item["VersionId"]) for item in deleted},
             {
-                ("tenants/demo/clients/bluemesa-payments/projects/bluemesa-payments/handoff/latest.json", "old-json"),
-                ("tenants/demo/clients/bluemesa-payments/projects/bluemesa-payments/handoff/latest.docx", "old-docx"),
+                ("tenants/demo/clients/bluemesa-payments/projects/bluemesa-payments/handoff/handoff-test-write/latest.json", "old-json"),
+                ("tenants/demo/clients/bluemesa-payments/projects/bluemesa-payments/handoff/handoff-test-write/latest.docx", "old-docx"),
             },
         )
         self.assertFalse(result["idempotent"])
+
+    def test_distinct_handoffs_never_write_the_same_objects(self):
+        stored = {}
+
+        class FakeS3:
+            def put_object(self, **request):
+                stored[request["Key"]] = request["Body"]
+                return {}
+
+            def generate_presigned_url(self, *_args, **_kwargs):
+                return "https://download.example/handoff.docx"
+
+        class FakeDatabase:
+            def put_item(self, **_request):
+                return {}
+
+        s3 = FakeS3()
+        with patch.object(app, "_idempotency_record", return_value={}), patch.object(app, "_client", side_effect=lambda service: s3 if service == "s3" else FakeDatabase()):
+            results = [app.create_handoff_packet(SCOPE, {
+                "projectAnswer": label,
+                "projectArtifacts": {"twoWeekPlan": [{"title": "Pilot", "detail": label}]},
+            }, audience="Engineer", idempotency_key=label, confirm_write=True) for label in ["first-user", "second-user"]]
+        self.assertEqual(len(stored), 4)
+        self.assertNotEqual(results[0]["artifactKey"], results[1]["artifactKey"])
+
+    def test_duplicate_handoff_rejects_cross_project_artifact_keys(self):
+        with patch.object(app, "_idempotency_record", return_value={"artifactKey": "tenants/other/latest.json", "docxArtifactKey": "tenants/other/latest.docx"}), patch.object(app, "_client") as client:
+            with self.assertRaises(PermissionError):
+                app.create_handoff_packet(SCOPE, {"projectAnswer": "Answer", "projectArtifacts": {"twoWeekPlan": []}}, audience="PM", idempotency_key="old-job", confirm_write=True)
+            client.return_value.head_object.assert_not_called()
 
     def test_duplicate_handoff_returns_a_fresh_download_url(self):
         packet = {
@@ -544,13 +574,19 @@ class ToolTests(unittest.TestCase):
         presigned = []
 
         class FakeS3:
+            def head_object(self, **kwargs):
+                return {}
+
             def generate_presigned_url(self, operation, **kwargs):
                 presigned.append({"operation": operation, **kwargs})
                 return "https://download.example/handoff.docx"
 
         with (
             patch.object(app, "ARTIFACT_BUCKET", "private-artifacts"),
-            patch.object(app, "_idempotency_exists", return_value=True),
+            patch.object(app, "_idempotency_record", return_value={
+                "artifactKey": "tenants/demo/clients/bluemesa-payments/projects/bluemesa-payments/handoff/latest.json",
+                "docxArtifactKey": "tenants/demo/clients/bluemesa-payments/projects/bluemesa-payments/handoff/latest.docx",
+            }),
             patch.object(app, "_client", return_value=FakeS3()),
         ):
             result = app.create_handoff_packet(
@@ -564,6 +600,7 @@ class ToolTests(unittest.TestCase):
         self.assertTrue(result["idempotent"])
         self.assertEqual(result["docxDownloadUrl"], "https://download.example/handoff.docx")
         self.assertEqual(presigned[0]["ExpiresIn"], 3600)
+        self.assertEqual(presigned[0]["Params"]["Key"], "tenants/demo/clients/bluemesa-payments/projects/bluemesa-payments/handoff/latest.docx")
 
 
 if __name__ == "__main__":

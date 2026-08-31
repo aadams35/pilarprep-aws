@@ -3,6 +3,12 @@ Transform: AWS::Serverless-2016-10-31
 Description: PilarPrep unified HTTPS and SQS AI job pipeline
 
 Parameters:
+  WorkerMaximumConcurrency:
+    Type: Number
+    Default: 2
+    MinValue: 2
+    MaxValue: 50
+    Description: Maximum simultaneous SQS worker executions. Check Lambda and Bedrock quotas before increasing.
   MeetingEvidenceBucketName:
     Type: String
     Default: ""
@@ -1510,7 +1516,7 @@ Resources:
             FunctionResponseTypes:
               - ReportBatchItemFailures
             ScalingConfig:
-              MaximumConcurrency: 2
+              MaximumConcurrency: !Ref WorkerMaximumConcurrency
 
   DemoJobsApiInvokePolicy:
     Type: AWS::IAM::Policy
@@ -1786,6 +1792,52 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
+  AiWorkerThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-ai-worker-throttles"
+      AlarmDescription: Worker executions were throttled. Check account capacity before increasing queue concurrency.
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AiWorkerFunction
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+  ArtifactCleanupFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref OperationsAlertTopic]
+      OKActions: [!Ref OperationsAlertTopic]
+      AlarmName: !Sub "${ResourcePrefix}-artifact-cleanup-failures"
+      AlarmDescription: A packet was saved, but superseded draft cleanup needs attention.
+      Namespace: PilarPrep
+      MetricName: ArtifactCleanupFailures
+      Dimensions:
+        - Name: Service
+          Value: JobsPipeline
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
   AiWorkerDurationAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -2338,6 +2390,9 @@ Resources:
         }
 
 Outputs:
+  WorkerMaximumConcurrency:
+    Description: Maximum simultaneous worker executions from the shared job queue.
+    Value: !Ref WorkerMaximumConcurrency
   JobsApiUrl:
     Description: HTTPS base URL for the unified IAM-authenticated Jobs API.
     Value: !Sub "https://${JobsApi}.execute-api.${AWS::Region}.amazonaws.com"

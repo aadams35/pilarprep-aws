@@ -35,6 +35,8 @@ param(
   [int]$AuthTenantDailyAiLimit = 500,
   [ValidateRange(1, 100)]
   [int]$ClaudeDailyAiLimit = 5,
+  [ValidateRange(2, 50)]
+  [int]$WorkerMaximumConcurrency = 2,
   [string]$DataKmsKeyArn = "",
   [string]$KnowledgeBaseGeneration = "v2",
   [string]$OperationsAlertEmail = "",
@@ -119,6 +121,18 @@ if (-not $PSBoundParameters.ContainsKey("EvidenceVectorBucketName")) {
 if (-not $PSBoundParameters.ContainsKey("KnowledgeBaseGeneration")) {
   $KnowledgeBaseGeneration = Resolve-PilarPrepKnowledgeBaseGeneration -StackName $StackName -Region $Region -Profile $Profile -DefaultGeneration $KnowledgeBaseGeneration
 }
+
+if (-not $PSBoundParameters.ContainsKey("WorkerMaximumConcurrency")) {
+  $existingCapacity = Resolve-PilarPrepBucketParameter -StackName $StackName -ParameterName "WorkerMaximumConcurrency" -DefaultName "2" -Region $Region -Profile $Profile
+  if ($existingCapacity) { $WorkerMaximumConcurrency = [int]$existingCapacity }
+}
+$lambdaLimits = Invoke-Aws lambda get-account-settings --region $Region --query "AccountLimit" --output json | ConvertFrom-Json
+# Budget a tool invocation per busy worker and four executions for the API and other functions.
+$requiredCapacity = (2 * $WorkerMaximumConcurrency) + 4
+if ($null -eq $lambdaLimits.UnreservedConcurrentExecutions -or [int]$lambdaLimits.UnreservedConcurrentExecutions -lt $requiredCapacity) {
+  throw "WorkerMaximumConcurrency=$WorkerMaximumConcurrency needs at least $requiredCapacity unreserved Lambda executions under the PilarPrep capacity plan. Request a quota increase or reduce the worker limit."
+}
+Write-Host "Worker limit: $WorkerMaximumConcurrency; account unreserved capacity: $($lambdaLimits.UnreservedConcurrentExecutions)"
 
 $backendOutputs = Invoke-Aws cloudformation describe-stacks `
   --stack-name $BackendStackName `
@@ -211,6 +225,7 @@ $parameterOverrides = @(
   "AuthUserDailyAiLimit=$AuthUserDailyAiLimit",
   "AuthTenantDailyAiLimit=$AuthTenantDailyAiLimit",
   "ClaudeDailyAiLimit=$ClaudeDailyAiLimit",
+  "WorkerMaximumConcurrency=$WorkerMaximumConcurrency",
   "DataKmsKeyArn=$DataKmsKeyArn",
   "KnowledgeBaseGeneration=$KnowledgeBaseGeneration",
   "OperationsAlertEmail=$OperationsAlertEmail",

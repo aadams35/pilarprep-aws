@@ -272,7 +272,7 @@ def _idempotency_sort_key(tool_name: str, idempotency_key: str) -> str:
     return f"IDEMPOTENCY#{tool_name}#{idempotency_key}"
 
 
-def _idempotency_exists(scope: Mapping[str, str], tool_name: str, key: str) -> bool:
+def _idempotency_record(scope: Mapping[str, str], tool_name: str, key: str) -> dict[str, Any]:
     response = _client("dynamodb").get_item(
         TableName=PROJECT_TABLE,
         Key={
@@ -280,9 +280,12 @@ def _idempotency_exists(scope: Mapping[str, str], tool_name: str, key: str) -> b
             "sortKey": {"S": _idempotency_sort_key(tool_name, key)},
         },
         ConsistentRead=True,
-        ProjectionExpression="projectId",
     )
-    return bool(response.get("Item"))
+    return {name: _DESERIALIZER.deserialize(value) for name, value in response.get("Item", {}).items()}
+
+
+def _idempotency_exists(scope: Mapping[str, str], tool_name: str, key: str) -> bool:
+    return bool(_idempotency_record(scope, tool_name, key))
 
 
 def save_project_update(
@@ -453,7 +456,7 @@ def create_handoff_packet(
         raise ValueError("packet requires projectAnswer and projectArtifacts")
     role = require_string(audience, "audience", maximum=32)
     key = require_identifier(idempotency_key, "idempotencyKey")
-    prefix = f"{project_artifact_prefix(dict(scope))}/handoff/"
+    prefix = f"{project_artifact_prefix(dict(scope))}/handoff/{key}/"
     json_key = f"{prefix}latest.json"
     docx_key = f"{prefix}latest.docx"
     s3 = _client("s3")
@@ -461,7 +464,21 @@ def create_handoff_packet(
     download_filename = _artifact_download_filename(
         packet.get("company") or scope["clientId"], "handoff", packet_version
     )
-    if _idempotency_exists(scope, "create_handoff_packet", key):
+    existing = _idempotency_record(scope, "create_handoff_packet", key)
+    if existing:
+        # Older deployments used one shared key; replay the recorded keys, not a new path.
+        json_key = str(existing.get("artifactKey") or "")
+        docx_key = str(existing.get("docxArtifactKey") or "")
+        allowed_prefix = f"{project_artifact_prefix(dict(scope))}/handoff/"
+        if not json_key.startswith(allowed_prefix) or not docx_key.startswith(allowed_prefix):
+            raise PermissionError("Stored handoff is outside the requested project")
+        try:
+            s3.head_object(Bucket=ARTIFACT_BUCKET, Key=json_key)
+            s3.head_object(Bucket=ARTIFACT_BUCKET, Key=docx_key)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+                raise RuntimeError("This handoff was superseded; reload the latest packet") from exc
+            raise
         return _handoff_result(
             s3,
             json_key,

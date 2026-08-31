@@ -27,7 +27,8 @@
     "smoke:aws": "node scripts/smoke-aws-live.mjs",
     "smoke:agentcore": "node scripts/smoke-agentcore-live.mjs",
     "smoke:pipeline": "node scripts/smoke-jobs-pipeline-live.mjs",
-    "smoke:meeting": "node scripts/smoke-meeting-live.mjs"
+    "smoke:meeting": "node scripts/smoke-meeting-live.mjs",
+    "smoke:multiuser": "node scripts/smoke-multiuser-live.mjs"
   },
   "dependencies": {
     "@aws-crypto/sha256-js": "^5.2.0",

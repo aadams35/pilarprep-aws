@@ -95,5 +95,6 @@ The [model evaluation guide](evals/README.md) includes 28 synthetic scenarios fo
 - [Resource names](docs/resource-names.md): physical storage names, migration safeguards, and rollback retention.
 - [Security](SECURITY.md): demo boundaries, reporting, and known production gaps.
 - [Operations](docs/operations.md): failed jobs, DLQ handling, audio events, and cost controls.
+- [Scaling](docs/scaling.md): simultaneous users, worker limits, load checks, and a phased capacity plan.
 - [Engineering decisions](docs/engineering-decisions.md): tradeoffs and remaining work.
 - [Contributing](CONTRIBUTING.md) and [attribution](NOTICE.md).
