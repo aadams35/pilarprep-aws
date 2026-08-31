@@ -3,11 +3,42 @@ import test from "node:test";
 import { ApiResponseError, readApiJson } from "../frontend/src/lib/api-response.ts";
 
 import {
+  parseCurrentPacket,
   parseEvidenceDocuments,
   parsePipelineAccepted,
   parsePipelineStatus,
   pollPipelineJob,
 } from "../frontend/src/lib/jobs-client.ts";
+
+test("current packet recovery requires an exact scope and authoritative version", () => {
+  const current = parseCurrentPacket(
+    {
+      clientId: "apex-mutual",
+      projectId: "apex-mutual",
+      packetVersion: 4,
+      approvalStatus: "stale",
+      packet: { provider: "bedrock" },
+      requestContext: { company: "Apex Mutual" },
+    },
+    { clientId: "apex-mutual", projectId: "apex-mutual" }
+  );
+  assert.equal(current.packetVersion, 4);
+  assert.equal(current.approvalStatus, "stale");
+  assert.throws(
+    () => parseCurrentPacket(
+      { ...current, clientId: "another-client" },
+      { clientId: "apex-mutual", projectId: "apex-mutual" }
+    ),
+    /outside the selected scope/
+  );
+  assert.throws(
+    () => parseCurrentPacket(
+      { ...current, packetVersion: 0 },
+      { clientId: "apex-mutual", projectId: "apex-mutual" }
+    ),
+    /invalid current packet version/
+  );
+});
 
 const accepted = {
   jobId: "job-0001",

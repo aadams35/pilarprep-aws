@@ -1401,6 +1401,94 @@ def _get_latest(event: Mapping[str, Any], client_id: str) -> dict[str, Any]:
     )
 
 
+def _get_current(event: Mapping[str, Any], client_id: str) -> dict[str, Any]:
+    scope = _scope_from_query(
+        event, client_id=require_identifier(client_id, "clientId")
+    )
+    metadata_item = aws_client("dynamodb").get_item(
+        TableName=PROJECT_TABLE,
+        Key={
+            "projectId": {"S": project_partition_key(scope)},
+            "sortKey": {"S": "BRIEF#LATEST"},
+        },
+        ConsistentRead=True,
+    ).get("Item")
+    metadata = deserialize_item(metadata_item)
+    packet_version = int(metadata.get("packetVersion") or 0)
+    if packet_version < 1:
+        raise LookupError("No current brief exists for this client")
+
+    is_approved = (
+        metadata.get("approvalStatus") == "approved"
+        and int(metadata.get("approvedPacketVersion") or 0) == packet_version
+    )
+    artifact_key = str(
+        metadata.get("approvedArtifactKey" if is_approved else "draftArtifactKey")
+        or ""
+    )
+    docx_key = str(
+        metadata.get(
+            "approvedDocxArtifactKey" if is_approved else "draftDocxArtifactKey"
+        )
+        or ""
+    )
+    expected_prefix = f"{project_artifact_prefix(scope)}/brief/"
+    if not artifact_key or not artifact_key.startswith(expected_prefix):
+        raise ScopeAuthorizationError("Stored packet is outside the authorized project")
+    if docx_key and not docx_key.startswith(expected_prefix):
+        raise ScopeAuthorizationError("Stored packet is outside the authorized project")
+
+    stored = aws_client("s3").get_object(
+        Bucket=ARTIFACT_BUCKET, Key=artifact_key
+    )
+    document = json.loads(stored["Body"].read().decode("utf-8"))
+    stored_packet = document.get("response") if isinstance(document, dict) else None
+    if not isinstance(stored_packet, dict):
+        raise ValueError("Stored packet is invalid")
+    packet = dict(stored_packet)
+    packet_metadata = dict(packet.get("metadata") or {})
+    packet_metadata.pop("docxDownloadUrl", None)
+    packet_metadata.update(
+        {
+            "clientId": scope["clientId"],
+            "projectId": scope["projectId"],
+            "packetVersion": packet_version,
+            "approvedPacketVersion": metadata.get("approvedPacketVersion"),
+            "approvalStatus": metadata.get("approvalStatus") or "draft",
+            "approvedAt": metadata.get("approvedAt"),
+        }
+    )
+    if docx_key:
+        packet_metadata["docxDownloadUrl"] = aws_client("s3").generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": ARTIFACT_BUCKET,
+                "Key": docx_key,
+                "ResponseContentDisposition": _content_disposition(
+                    _artifact_download_filename(
+                        metadata.get("company") or scope["clientId"],
+                        "brief",
+                        packet_version,
+                    )
+                ),
+            },
+            ExpiresIn=900,
+        )
+    packet["metadata"] = packet_metadata
+    return response(
+        event,
+        200,
+        {
+            "clientId": scope["clientId"],
+            "projectId": scope["projectId"],
+            "packetVersion": packet_version,
+            "approvalStatus": packet_metadata["approvalStatus"],
+            "packet": packet,
+            "requestContext": document.get("request") or {},
+        },
+    )
+
+
 def _artifact_download_filename(company: object, artifact_type: str, version: object) -> str:
     clean_company = " ".join(str(company or "Client").split())
     clean_company = "".join(
@@ -1508,6 +1596,9 @@ def handler(event: object, _context: Any) -> dict[str, Any]:
             return _list_clients(event)
         if method == "GET" and path == "/workspace/evidence":
             return _list_evidence(event)
+        if method == "GET" and path.endswith("/current") and "/clients/" in path:
+            client_id = _path_parameter(event, "clientId") or path.split("/clients/", 1)[1].split("/", 1)[0]
+            return _get_current(event, client_id)
         if method == "GET" and path.endswith("/latest") and "/clients/" in path:
             client_id = _path_parameter(event, "clientId") or path.split("/clients/", 1)[1].split("/", 1)[0]
             return _get_latest(event, client_id)

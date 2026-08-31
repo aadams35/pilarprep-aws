@@ -261,3 +261,33 @@ export function parseLatestPacket(value: unknown) {
     requestContext: isRecord(value.requestContext) ? value.requestContext : {},
   };
 }
+
+export function parseCurrentPacket(
+  value: unknown,
+  expected: { clientId: string; projectId: string }
+) {
+  if (!isRecord(value) || !isRecord(value.packet)) {
+    throw new Error("The Jobs API returned an invalid current packet.");
+  }
+  const approvalStatus = value.approvalStatus;
+  if (approvalStatus !== "draft" && approvalStatus !== "stale" && approvalStatus !== "approved") {
+    throw new Error("The Jobs API returned an invalid current packet status.");
+  }
+  const packetVersion = value.packetVersion;
+  if (typeof packetVersion !== "number" || !Number.isInteger(packetVersion) || packetVersion < 1) {
+    throw new Error("The Jobs API returned an invalid current packet version.");
+  }
+  const clientId = requiredString(value.clientId, "client scope");
+  const projectId = requiredString(value.projectId, "project scope");
+  if (clientId !== expected.clientId || projectId !== expected.projectId) {
+    throw new Error("The Jobs API returned a current packet outside the selected scope.");
+  }
+  return {
+    clientId,
+    projectId,
+    packetVersion,
+    approvalStatus,
+    packet: value.packet as unknown as BriefResponse,
+    requestContext: isRecord(value.requestContext) ? value.requestContext : {},
+  };
+}

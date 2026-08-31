@@ -1371,6 +1371,12 @@ Resources:
             ApiId: !Ref JobsApi
             Path: /clients/{clientId}/latest
             Method: GET
+        GetCurrentClientPacket:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /clients/{clientId}/current
+            Method: GET
         GetArtifact:
           Type: HttpApi
           Properties:
@@ -1430,6 +1436,14 @@ Resources:
           Properties:
             ApiId: !Ref JobsApi
             Path: /workspace/clients/{clientId}/latest
+            Method: GET
+            Auth:
+              Authorizer: WorkspaceJwtAuthorizer
+        WorkspaceGetCurrentClientPacket:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref JobsApi
+            Path: /workspace/clients/{clientId}/current
             Method: GET
             Auth:
               Authorizer: WorkspaceJwtAuthorizer
@@ -1534,6 +1548,7 @@ Resources:
               - !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${JobsApi}/*/GET/jobs/*"
               - !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${JobsApi}/*/GET/clients"
               - !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${JobsApi}/*/GET/clients/*/latest"
+              - !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${JobsApi}/*/GET/clients/*/current"
               - !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${JobsApi}/*/GET/artifacts/*"
 
   OperationsAlertTopic:

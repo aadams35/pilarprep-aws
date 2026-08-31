@@ -1,5 +1,6 @@
 import json
 import unittest
+from io import BytesIO
 from unittest.mock import patch
 
 from backend.pipeline.tests.test_pipeline import SCOPE, api, common, iam_event
@@ -78,6 +79,63 @@ class SavedDownloadTests(unittest.TestCase):
         self.assertEqual(body["artifactKey"], self.key)
         self.assertEqual(body["downloadUrl"], "https://new.example/fresh")
         self.assertEqual(body["format"], "docx")
+
+    def test_current_returns_scoped_draft_with_authoritative_version(self):
+        draft_key = f"{common.project_artifact_prefix(SCOPE)}/brief/draft/job-1/version-1/latest.json"
+        draft_docx_key = f"{common.project_artifact_prefix(SCOPE)}/brief/draft/job-1/version-1/latest.docx"
+        draft_metadata = {
+            "packetVersion": 4,
+            "approvedPacketVersion": 3,
+            "approvalStatus": "stale",
+            "company": "Apex Mutual",
+            "draftArtifactKey": draft_key,
+            "draftDocxArtifactKey": draft_docx_key,
+        }
+        document = {
+            "request": {"company": "Apex Mutual"},
+            "response": {
+                "provider": "bedrock",
+                "metadata": {"packetVersion": 3, "docxDownloadUrl": "expired"},
+            },
+        }
+        with (
+            patch.object(api, "_scope_from_query", return_value=SCOPE),
+            patch.object(api, "deserialize_item", return_value=draft_metadata),
+            patch.object(api, "ARTIFACT_BUCKET", "pilarprep-demo-artifacts-test"),
+            patch.object(api, "aws_client") as client,
+        ):
+            client.return_value.get_item.return_value = {"Item": {"stored": {"S": "yes"}}}
+            client.return_value.get_object.return_value = {
+                "Body": BytesIO(json.dumps(document).encode("utf-8"))
+            }
+            client.return_value.generate_presigned_url.return_value = "https://new.example/draft"
+            result = api._get_current(iam_event("GET"), SCOPE["clientId"])
+
+        body = json.loads(result["body"])
+        self.assertEqual(body["packetVersion"], 4)
+        self.assertEqual(body["approvalStatus"], "stale")
+        self.assertEqual(body["packet"]["metadata"]["packetVersion"], 4)
+        self.assertEqual(body["packet"]["metadata"]["approvalStatus"], "stale")
+        self.assertEqual(body["packet"]["metadata"]["docxDownloadUrl"], "https://new.example/draft")
+        signed = client.return_value.generate_presigned_url.call_args.kwargs
+        self.assertEqual(signed["Params"]["Key"], draft_docx_key)
+        self.assertEqual(signed["ExpiresIn"], 900)
+
+    def test_current_rejects_draft_outside_authorized_project(self):
+        metadata = {
+            "packetVersion": 4,
+            "approvalStatus": "stale",
+            "draftArtifactKey": "tenants/other/clients/other/brief/draft/latest.json",
+        }
+        with (
+            patch.object(api, "_scope_from_query", return_value=SCOPE),
+            patch.object(api, "deserialize_item", return_value=metadata),
+            patch.object(api, "aws_client") as client,
+        ):
+            client.return_value.get_item.return_value = {"Item": {"stored": {"S": "yes"}}}
+            with self.assertRaises(api.ScopeAuthorizationError):
+                api._get_current(iam_event("GET"), SCOPE["clientId"])
+        client.return_value.get_object.assert_not_called()
 
 
 if __name__ == "__main__":

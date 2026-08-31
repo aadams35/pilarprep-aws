@@ -35,6 +35,7 @@ import {
 } from "@/lib/cognito-auth";
 import {
   parseAuthorizedClients,
+  parseCurrentPacket,
   parseEvidenceDocuments,
   parseLatestPacket,
   parsePipelineAccepted,
@@ -2772,6 +2773,44 @@ const industryFocus = useMemo(() => {
     return normalized as TResult;
   }
 
+  async function recoverCurrentBrief(error: unknown, operation: "refinement" | "approval") {
+    const message = error instanceof Error ? error.message : "";
+    if (!/brief changed before (?:refinement|approval)/i.test(message)) {
+      return false;
+    }
+    const clientId = pipelineClientIdentifier(company);
+    const projectId = clientId;
+    const sessionId = agentSessionId();
+    const current = parseCurrentPacket(
+      await signedPipelineRequest(
+        `clients/${encodeURIComponent(clientId)}/current?projectId=${encodeURIComponent(projectId)}&sessionId=${encodeURIComponent(sessionId)}`,
+        "GET"
+      ),
+      { clientId, projectId }
+    );
+    const packet = normalizeBriefResponse(
+      current.packet,
+      current.packet.provider === "agentcore" ? "agentcore" : "bedrock"
+    );
+    const isApproved = current.approvalStatus === "approved";
+    setGeneratedBrief(packet);
+    setBriefVersion(current.packetVersion);
+    setApproved(isApproved);
+    setApprovalStale(current.approvalStatus === "stale");
+    setPromoted(false);
+    setSelectedHistoryId(null);
+    setReviewMode("clean");
+    setPrecallHandoffStatus(isApproved ? "idle" : "stale");
+    setPrecallHandoffError("");
+    setGenerationError("");
+    setGenerationNotice(
+      `A newer saved brief v${current.packetVersion} was loaded. Review it, then ${
+        operation === "refinement" ? "apply the pending feedback again" : "approve this version"
+      }.`
+    );
+    return true;
+  }
+
 
   async function loadEvidenceDocuments() {
     if (!authSession) {
@@ -3267,6 +3306,8 @@ const industryFocus = useMemo(() => {
         if (mode === "project") {
           setPrecallHandoffStatus("idle");
         }
+      } else if (await recoverCurrentBrief(error, "refinement")) {
+        // The pending feedback remains in the editor and can be applied to the recovered version.
       } else {
         const message = error instanceof Error ? error.message : "Brief generation failed";
         setGenerationError(message);
@@ -3356,6 +3397,8 @@ const industryFocus = useMemo(() => {
         if (requestEpoch !== packetRequestEpochRef.current) return;
         if (error instanceof DOMException && error.name === "AbortError") {
           setGenerationNotice("Approval was cancelled. The draft remains unchanged.");
+        } else if (await recoverCurrentBrief(error, "approval")) {
+          // Require a human to review the recovered server version before approving again.
         } else {
           setGenerationError(
             error instanceof Error
@@ -5083,6 +5126,9 @@ const industryFocus = useMemo(() => {
 
               <div className="brief-workspace-main">
                 <div className="space-y-4">
+                  {generatedBrief && generationNotice ? (
+                    <p className="notice-note" role="status">{generationNotice}</p>
+                  ) : null}
                   {generatedBrief && generationError ? (
                     <p className="error-note" role="alert">{generationError}</p>
                   ) : null}

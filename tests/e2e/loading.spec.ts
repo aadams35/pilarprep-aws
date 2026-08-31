@@ -633,6 +633,123 @@ test("refinement failure preserves confidence and success updates only the selec
   await expect(page.getByText("50% linked", { exact: true })).toBeVisible();
 });
 
+test("a stale browser loads the current draft before feedback is reapplied and approved", async ({ page }) => {
+  const requests: Array<{ action: string; input: Record<string, unknown> }> = [];
+  const serverVersionTwo = {
+    ...completedBrief,
+    technical: completedBrief.technical.map((text) => `Current saved version: ${text}`),
+    metadata: {
+      ...completedBrief.metadata,
+      packetVersion: 2,
+      baseBriefVersion: 1,
+      refinementTarget: "technical",
+      refinementIsolationPassed: true,
+      approvalStatus: "stale",
+    },
+  };
+  const serverVersionThree = {
+    ...serverVersionTwo,
+    technical: serverVersionTwo.technical.map((text) => `Reapplied feedback: ${text}`),
+    metadata: {
+      ...serverVersionTwo.metadata,
+      packetVersion: 3,
+      baseBriefVersion: 2,
+    },
+  };
+  const serverVersionFour = {
+    ...serverVersionThree,
+    technical: serverVersionThree.technical.map((text) => `Latest saved version: ${text}`),
+    metadata: {
+      ...serverVersionThree.metadata,
+      packetVersion: 4,
+      baseBriefVersion: 3,
+    },
+  };
+  let refineAttempts = 0;
+  let approvalAttempts = 0;
+  let currentReads = 0;
+
+  await page.route("https://test.execute-api.us-east-1.amazonaws.com/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "GET" && path === "/clients") {
+      await route.fulfill({ json: { clients: [] } });
+      return;
+    }
+    if (request.method() === "GET" && path.endsWith("/clients/apex-mutual/current")) {
+      currentReads += 1;
+      const currentPacket = currentReads === 1 ? serverVersionTwo : serverVersionFour;
+      await route.fulfill({ json: {
+        clientId: "apex-mutual", projectId: "apex-mutual",
+        packetVersion: currentPacket.metadata.packetVersion,
+        approvalStatus: "stale", packet: currentPacket, requestContext: {},
+      } });
+      return;
+    }
+    if (request.method() === "POST") {
+      const payload = request.postDataJSON();
+      requests.push(payload);
+      if (payload.action === "brief.refine") refineAttempts += 1;
+      if (payload.action === "brief.approve") approvalAttempts += 1;
+      await route.fulfill({ status: 202, json: {
+        jobId: payload.action === "brief.generate" ? "generate-v1"
+          : payload.action === "brief.approve" ? approvalAttempts === 1 ? "stale-approve" : "approve-v4"
+            : refineAttempts === 1 ? "stale-refine" : "refine-v3",
+        clientId: "apex-mutual", projectId: "apex-mutual", status: "queued", pollAfterMs: 10,
+      } });
+      return;
+    }
+    const jobId = path.split("/").at(-1) ?? "";
+    const result = jobId === "generate-v1" ? completedBrief
+      : jobId === "refine-v3" ? serverVersionThree
+        : jobId === "approve-v4" ? {
+            ...serverVersionFour,
+            metadata: { ...serverVersionFour.metadata, approvalStatus: "approved", approvedPacketVersion: 4 },
+          }
+          : undefined;
+    await route.fulfill({ json: {
+      jobId, action: jobId === "generate-v1" ? "brief.generate"
+        : jobId.includes("approve") ? "brief.approve" : "brief.refine",
+      clientId: "apex-mutual", projectId: "apex-mutual",
+      status: jobId.startsWith("stale-") ? "failed" : "complete",
+      error: jobId === "stale-refine"
+        ? "The brief changed before refinement; reload the latest packet and apply feedback again."
+        : jobId === "stale-approve"
+          ? "The brief changed before approval; review the latest version."
+          : undefined,
+      result,
+    } });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /Generate AI prebrief/i }).click();
+  await page.getByRole("button", { name: /Discovery/ }).first().click();
+  const notes = page.getByRole("textbox", { name: "Additional technical context" });
+  await notes.fill("Confirm payroll reconciliation ownership before cutover.");
+  const apply = page.locator("#brief-refine-section").getByRole("button", { name: /Apply feedback/i });
+  await apply.click();
+  await expect(page.getByText("A newer saved brief v2 was loaded. Review it, then apply the pending feedback again.")).toBeVisible();
+  await expect(page.getByText(serverVersionTwo.technical[0], { exact: true })).toBeVisible();
+  await expect(notes).toHaveValue("Confirm payroll reconciliation ownership before cutover.");
+
+  await apply.click();
+  await expect(page.getByText(serverVersionThree.technical[0], { exact: true })).toBeVisible();
+  const refinementRequests = requests.filter((item) => item.action === "brief.refine");
+  expect(refinementRequests).toHaveLength(2);
+  expect(refinementRequests[0].input.baseBriefVersion).toBe(1);
+  expect(refinementRequests[1].input.baseBriefVersion).toBe(2);
+
+  await page.getByRole("button", { name: "Approve updated pre-call packet", exact: true }).click();
+  await expect(page.getByText("A newer saved brief v4 was loaded. Review it, then approve this version.")).toBeVisible();
+  await expect(page.getByText(serverVersionFour.technical[0], { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Approve updated pre-call packet", exact: true }).click();
+  await expect(page.getByText("Approved brief ready", { exact: true })).toBeVisible();
+  const approvals = requests.filter((item) => item.action === "brief.approve");
+  expect(approvals).toHaveLength(2);
+  expect(approvals[0].input.packetVersion).toBe(3);
+  expect(approvals[1].input.packetVersion).toBe(4);
+});
+
 test("late generation cannot replace a different selected customer", async ({ page }) => {
   let release: () => void = () => {};
   const delayed = new Promise<void>((resolve) => { release = resolve; });
