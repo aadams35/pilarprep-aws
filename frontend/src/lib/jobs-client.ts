@@ -5,6 +5,13 @@ import type {
   PipelineJobAccepted,
   PipelineJobStatus,
 } from "./types";
+import { readRetryDelay } from "./api-response.ts";
+
+function pollInterval(value: unknown, fallback = 1500) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(750, Math.min(value, 5000))
+    : fallback;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -43,10 +50,7 @@ export function parsePipelineAccepted(
     clientId,
     projectId,
     status,
-    pollAfterMs:
-      typeof value.pollAfterMs === "number" && Number.isFinite(value.pollAfterMs)
-        ? Math.max(750, Math.min(value.pollAfterMs, 5000))
-        : 1500,
+    pollAfterMs: pollInterval(value.pollAfterMs),
     idempotent: value.idempotent === true,
   };
 }
@@ -93,11 +97,12 @@ export async function pollPipelineJob<TResult = BriefResponse>(
     signal?: AbortSignal;
     onStatus?: (status: PipelineJobStatus["status"]) => void;
     onProgress?: (status: PipelineJobStatus) => void;
+    onRetry?: (delayMs: number) => void;
   } = {}
 ) {
   const controller = new AbortController();
   const timeoutError = new DOMException(
-    "The AI job is still running after twelve minutes. Try again.",
+    "The result could not be confirmed in time. Processing may still be running; your approved brief is unchanged.",
     "TimeoutError"
   );
   const relayAbort = () =>
@@ -105,9 +110,12 @@ export async function pollPipelineJob<TResult = BriefResponse>(
       options.signal?.reason ?? new DOMException("The AI request was cancelled.", "AbortError")
     );
   options.signal?.addEventListener("abort", relayAbort, { once: true });
+  if (options.signal?.aborted) relayAbort();
   const timeout = setTimeout(() => controller.abort(timeoutError), timeoutMs);
-  let pollAfterMs = accepted.pollAfterMs;
+  let pollAfterMs = pollInterval(accepted.pollAfterMs);
   let consecutiveFetchFailures = 0;
+  let unchangedPolls = 0;
+  let previousStatus: PipelineJobStatus["status"] = accepted.status;
   options.onStatus?.(accepted.status);
 
   const abortReason = () =>
@@ -138,8 +146,7 @@ export async function pollPipelineJob<TResult = BriefResponse>(
 
   try {
     while (!controller.signal.aborted) {
-      const waitMs = Math.max(750, Math.min(pollAfterMs, 5000));
-      await abortableWait(waitMs);
+      await abortableWait(pollAfterMs);
       let rawStatus: unknown;
       try {
         rawStatus = await fetchStatus(controller.signal);
@@ -149,13 +156,15 @@ export async function pollPipelineJob<TResult = BriefResponse>(
           throw abortReason();
         }
         consecutiveFetchFailures += 1;
-        if (consecutiveFetchFailures > 3) {
-          throw error;
-        }
-        pollAfterMs = Math.min(4_000, 750 * 2 ** consecutiveFetchFailures);
+        const retryDelay = readRetryDelay(error, consecutiveFetchFailures);
+        if (retryDelay === undefined) throw error;
+        pollAfterMs = retryDelay;
+        options.onRetry?.(retryDelay);
         continue;
       }
       const status = parsePipelineStatus(rawStatus, accepted);
+      unchangedPolls = status.status === previousStatus ? unchangedPolls + 1 : 0;
+      previousStatus = status.status;
       options.onStatus?.(status.status);
       options.onProgress?.(status);
       if (
@@ -168,7 +177,10 @@ export async function pollPipelineJob<TResult = BriefResponse>(
         status.status === "screening" ||
         status.status === "analyzing"
       ) {
-        pollAfterMs = status.pollAfterMs ?? pollAfterMs;
+        pollAfterMs = Math.min(
+          5000,
+          pollInterval(status.pollAfterMs, pollInterval(accepted.pollAfterMs)) + unchangedPolls * 250
+        );
         continue;
       }
       if (status.status === "failed") {

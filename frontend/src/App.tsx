@@ -64,10 +64,8 @@ import {
   toggleRefinementFeedback,
   type RefinementDrafts,
 } from "@/lib/refinement";
-import {
-  extractBackendError,
-  normalizeBriefResponse,
-} from "@/lib/response";
+import { normalizeBriefResponse } from "@/lib/response";
+import { readApiJson, readRetryDelay } from "@/lib/api-response";
 import type {
   BriefRequest,
   BriefResponse,
@@ -2718,15 +2716,7 @@ const industryFocus = useMemo(() => {
         { method, payload, signal }
       );
     }
-    const body = await response.text();
-    if (!response.ok) {
-      throw new Error(extractBackendError(body));
-    }
-    try {
-      return JSON.parse(body) as unknown;
-    } catch {
-      throw new Error("The Jobs API returned invalid JSON.");
-    }
+    return readApiJson(response);
   }
 
   async function workspacePipelineRequest(
@@ -2747,15 +2737,7 @@ const industryFocus = useMemo(() => {
       valid.token,
       { method, payload, signal }
     );
-    const body = await response.text();
-    if (!response.ok) {
-      throw new Error(extractBackendError(body));
-    }
-    try {
-      return JSON.parse(body) as unknown;
-    } catch {
-      throw new Error("The private workspace returned invalid JSON.");
-    }
+    return readApiJson(response);
   }
 
   async function requestPipelineJob<TResult = BriefResponse>(
@@ -2766,6 +2748,7 @@ const industryFocus = useMemo(() => {
       signal?: AbortSignal;
       onStatus?: (status: PipelineJobState) => void;
       onProgress?: (status: PipelineJobStatus) => void;
+      onRetry?: (delayMs: number) => void;
       timeoutMs?: number;
     } = {}
   ) {
@@ -3438,37 +3421,58 @@ const industryFocus = useMemo(() => {
     signal: AbortSignal
   ): Promise<"clean" | "blocked" | "scan_failed"> {
     const deadline = Date.now() + 300_000;
+    let pollAfterMs = 1800;
+    let failures = 0;
+    let pendingScans = 0;
     while (Date.now() < deadline) {
       if (signal.aborted) {
         throw signal.reason ?? new DOMException("Audio scan cancelled.", "AbortError");
       }
       await new Promise<void>((resolve, reject) => {
-        const timer = window.setTimeout(resolve, 1800);
+        const timer = window.setTimeout(() => {
+          signal.removeEventListener("abort", cancel);
+          resolve();
+        }, Math.min(pollAfterMs, Math.max(0, deadline - Date.now())));
         const cancel = () => {
           window.clearTimeout(timer);
+          signal.removeEventListener("abort", cancel);
           reject(signal.reason ?? new DOMException("Audio scan cancelled.", "AbortError"));
         };
         signal.addEventListener("abort", cancel, { once: true });
-        window.setTimeout(() => signal.removeEventListener("abort", cancel), 1850);
       });
-      const response = await workspacePipelineRequest(
-        "meeting-audio/uploads/" +
-          encodeURIComponent(uploadId) +
-          "?clientId=" +
-          encodeURIComponent(clientId) +
-          "&projectId=" +
-          encodeURIComponent(projectId) +
-          "&sessionId=" +
-          encodeURIComponent(sessionId),
-        "GET",
-        undefined,
-        signal
-      );
+      if (Date.now() >= deadline) break;
+      let response: unknown;
+      try {
+        response = await workspacePipelineRequest(
+          "meeting-audio/uploads/" +
+            encodeURIComponent(uploadId) +
+            "?clientId=" +
+            encodeURIComponent(clientId) +
+            "&projectId=" +
+            encodeURIComponent(projectId) +
+            "&sessionId=" +
+            encodeURIComponent(sessionId),
+          "GET",
+          undefined,
+          signal
+        );
+        failures = 0;
+      } catch (error) {
+        const retryDelay = readRetryDelay(error, ++failures);
+        if (retryDelay === undefined) throw error;
+        pollAfterMs = retryDelay;
+        setMeetingNotice("The malware scan is continuing. Reconnecting to its status...");
+        continue;
+      }
       if (typeof response !== "object" || response === null) {
         throw new Error("The audio malware scan returned an invalid status.");
       }
       const status = (response as Record<string, unknown>).status;
-      if (status === "pending_scan") continue;
+      if (status === "pending_scan") {
+        pollAfterMs = Math.min(5000, 1800 + ++pendingScans * 300);
+        setMeetingNotice("Audio uploaded securely. The malware scan is running.");
+        continue;
+      }
       if (status === "clean" || status === "processing") return "clean";
       if (status === "blocked" || status === "scan_failed") return status;
       throw new Error("The audio malware scan returned an unknown status.");
@@ -3574,6 +3578,7 @@ const industryFocus = useMemo(() => {
         return;
       }
       setMeetingAudio({ fileName: file.name, sizeBytes: file.size, status: "failed" });
+      setMeetingNotice("");
       setMeetingError(
         error instanceof TypeError
           ? "The browser could not reach the private audio workspace. Refresh and try the upload again."
@@ -3648,7 +3653,11 @@ const industryFocus = useMemo(() => {
         {
           signal: controller.signal,
           timeoutMs: 600_000,
-          onStatus: setMeetingJobStatus,
+          onStatus: (status) => {
+            setMeetingJobStatus(status);
+            setMeetingNotice("");
+          },
+          onRetry: () => setMeetingNotice("Processing continues. Reconnecting to meeting status..."),
         }
       );
       if (
@@ -3665,6 +3674,7 @@ const industryFocus = useMemo(() => {
       setSelectedLifecycleStage("meeting-prep");
     } catch (error) {
       setMeetingJobStatus("failed");
+      setMeetingNotice("");
       setMeetingError(
         error instanceof DOMException && error.name === "AbortError"
           ? "Meeting processing was cancelled. The approved brief is unchanged."

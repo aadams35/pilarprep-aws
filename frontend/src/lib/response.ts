@@ -443,20 +443,3 @@ export function normalizeBriefResponse(
     ]),
   };
 }
-
-export function extractBackendError(body: string) {
-  if (!body.trim()) {
-    return "AWS backend request failed";
-  }
-
-  try {
-    const parsed = JSON.parse(body) as unknown;
-    if (isRecord(parsed)) {
-      return asString(parsed.error) || asString(parsed.message) || body;
-    }
-  } catch {
-    // Keep the original body when the backend returned plain text.
-  }
-
-  return body;
-}

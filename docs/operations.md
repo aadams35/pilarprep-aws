@@ -14,7 +14,18 @@ The Jobs API returns a job ID before work completes. Follow that ID through the 
 | Audio cannot upload | Signed-in workspace, allowed scenario, signed upload, bucket CORS | Upload constraints, expiry, object metadata |
 | Scan never progresses | Object scan status and GuardDuty result event | EventBridge rule, queue policy, authorized waiting job |
 | Transcription stops | Transcribe job status and second event | Queue delivery, object scope/version, worker analysis failure |
+| Meeting UI fails with a CloudFront page | WAF sampled requests for the job-status GET; current DynamoDB job state | Per-IP rate limits, polling cadence, HTTP response status |
 | Download fails | Current scoped artifact lookup | Object existence, URL expiry, KMS permissions |
+
+## Meeting Status and Edge Rate Limits
+
+A blocked status request does not mean the meeting job failed. In the August 30 incident, the WAF's blanket 100-requests-per-five-minutes rule blocked four workspace job-status GETs while the same `meeting.process` job completed as `review-ready`. The browser was receiving CloudFront's HTML 403 page instead of the completed result.
+
+Check WAF sampled request metadata and the scoped job record before retrying transcription or replaying anything from a queue. Keep request headers, user identifiers, transcript text, and signed URLs out of incident reports. Sampled requests are not a complete access log.
+
+The frontend slows unchanged job-status polls up to five seconds apart. A 429 response delays further reads using `Retry-After` or `retryAfterSeconds`, within the original operation deadline. A recognized CloudFront blocked-request page allows at most three read retries, one minute apart. JSON authorization failures are not retried. No retry automatically submits another job, and unknown/HTML response bodies are never displayed as error text.
+
+WAF rate-limit changes require an explicit security review. The frontend recovery fix does not change WAF, bypass CloudFront, relax sign-in requirements, or skip GuardDuty. The existing edge limit may still be reached by multiple users sharing an IP until an approved policy change separates submissions from polling traffic.
 
 ## Dead-letter Queue
 
