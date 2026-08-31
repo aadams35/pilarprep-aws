@@ -4,6 +4,8 @@ import hashlib
 import json
 import logging
 import os
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -61,8 +63,8 @@ MEETING_AUDIO_UPLOAD_TTL_SECONDS = int(os.getenv("MEETING_AUDIO_UPLOAD_TTL_SECON
 MAX_REPLAY_COUNT = max(1, int(os.getenv("MAX_REPLAY_COUNT", "1")))
 MAX_TOTAL_ATTEMPTS = max(3, int(os.getenv("MAX_TOTAL_ATTEMPTS", "6")))
 QUARANTINE_VISIBILITY_SECONDS = 43_200
-GUEST_HOURLY_AI_LIMIT = max(1, int(os.getenv("GUEST_HOURLY_AI_LIMIT", "12")))
-GUEST_DAILY_AI_LIMIT = max(1, int(os.getenv("GUEST_DAILY_AI_LIMIT", "30")))
+GUEST_HOURLY_AI_LIMIT = max(1, int(os.getenv("GUEST_HOURLY_AI_LIMIT", "20")))
+GUEST_DAILY_AI_LIMIT = max(1, int(os.getenv("GUEST_DAILY_AI_LIMIT", "200")))
 AUTH_USER_DAILY_AI_LIMIT = max(1, int(os.getenv("AUTH_USER_DAILY_AI_LIMIT", "100")))
 AUTH_TENANT_DAILY_AI_LIMIT = max(1, int(os.getenv("AUTH_TENANT_DAILY_AI_LIMIT", "500")))
 CLAUDE_DAILY_AI_LIMIT = max(1, int(os.getenv("CLAUDE_DAILY_AI_LIMIT", "5")))
@@ -85,10 +87,41 @@ HOURLY_WINDOW_SECONDS = 3600
 DAILY_WINDOW_SECONDS = 86400
 
 
+@dataclass(frozen=True)
+class UsageQuotaWindow:
+    kind: str
+    label: str
+    key: str
+    limit: int
+    duration: int
+    window_start: int
+
+    @property
+    def resets_at(self) -> int:
+        return self.window_start + self.duration
+
+
 class UsageQuotaExceeded(RuntimeError):
-    def __init__(self, retry_after_seconds: int):
-        super().__init__("This account has reached its current AI usage limit")
-        self.retry_after_seconds = max(1, retry_after_seconds)
+    def __init__(self, window: UsageQuotaWindow, current_epoch: int):
+        self.retry_after_seconds = max(1, window.resets_at - current_epoch)
+        minutes = (self.retry_after_seconds + 59) // 60
+        hours, minutes = divmod(minutes, 60)
+        wait = []
+        if hours:
+            wait.append(f"{hours} hour" + ("s" if hours != 1 else ""))
+        if minutes:
+            wait.append(f"{minutes} minute" + ("s" if minutes != 1 else ""))
+        period = "hour" if window.duration == HOURLY_WINDOW_SECONDS else "day"
+        super().__init__(
+            f"{window.label} AI usage limit reached ({window.limit} requests per {period}). "
+            f"Try again in {' '.join(wait)}. Your saved work is unchanged."
+        )
+        self.quota = {
+            "kind": window.kind,
+            "limit": window.limit,
+            "windowSeconds": window.duration,
+            "resetsAt": datetime.fromtimestamp(window.resets_at, timezone.utc).isoformat(),
+        }
 
 
 class GenerationDisabled(RuntimeError):
@@ -147,59 +180,81 @@ def _consume_usage_quota(
     current_epoch = now_epoch()
     hour = current_epoch // HOURLY_WINDOW_SECONDS
     day = current_epoch // DAILY_WINDOW_SECONDS
-    retry_after = DAILY_WINDOW_SECONDS - (current_epoch % DAILY_WINDOW_SECONDS)
     user_id = scope["userId"]
-    updates: list[dict[str, Any]] = []
+    windows: list[UsageQuotaWindow] = []
     if scope.get("identityType") == "guest":
-        updates.append(
-            _usage_update(
-                scope,
-                key=f"USAGE#USER#{user_id}#HOUR#{hour}",
-                window_start=hour * HOURLY_WINDOW_SECONDS,
-                expires_at=current_epoch + (2 * HOURLY_WINDOW_SECONDS),
-                limit=GUEST_HOURLY_AI_LIMIT,
+        windows.append(
+            UsageQuotaWindow(
+                "guest_hourly", "Demo hourly",
+                f"USAGE#USER#{user_id}#HOUR#{hour}", GUEST_HOURLY_AI_LIMIT,
+                HOURLY_WINDOW_SECONDS, hour * HOURLY_WINDOW_SECONDS,
             )
         )
         daily_limit = GUEST_DAILY_AI_LIMIT
+        daily_kind, daily_label = "guest_daily", "Demo daily"
     else:
         daily_limit = AUTH_USER_DAILY_AI_LIMIT
-        updates.append(
-            _usage_update(
-                scope,
-                key=f"USAGE#TENANT#DAY#{day}",
-                window_start=day * DAILY_WINDOW_SECONDS,
-                expires_at=current_epoch + (2 * DAILY_WINDOW_SECONDS),
-                limit=AUTH_TENANT_DAILY_AI_LIMIT,
+        daily_kind, daily_label = "user_daily", "Account daily"
+        windows.append(
+            UsageQuotaWindow(
+                "tenant_daily", "Workspace daily", f"USAGE#TENANT#DAY#{day}",
+                AUTH_TENANT_DAILY_AI_LIMIT, DAILY_WINDOW_SECONDS,
+                day * DAILY_WINDOW_SECONDS,
             )
         )
-    updates.append(
-        _usage_update(
-            scope,
-            key=f"USAGE#USER#{user_id}#DAY#{day}",
-            window_start=day * DAILY_WINDOW_SECONDS,
-            expires_at=current_epoch + (2 * DAILY_WINDOW_SECONDS),
-            limit=daily_limit,
+    windows.append(
+        UsageQuotaWindow(
+            daily_kind, daily_label, f"USAGE#USER#{user_id}#DAY#{day}",
+            daily_limit, DAILY_WINDOW_SECONDS, day * DAILY_WINDOW_SECONDS,
         )
     )
     if model_preference == "claude-sonnet-4.6":
-        updates.append(
-            _usage_update(
-                scope,
-                key=f"USAGE#USER#{user_id}#MODEL#CLAUDE#DAY#{day}",
-                window_start=day * DAILY_WINDOW_SECONDS,
-                expires_at=current_epoch + (2 * DAILY_WINDOW_SECONDS),
-                limit=CLAUDE_DAILY_AI_LIMIT,
+        windows.append(
+            UsageQuotaWindow(
+                "claude_daily", "Claude daily", f"USAGE#USER#{user_id}#MODEL#CLAUDE#DAY#{day}",
+                CLAUDE_DAILY_AI_LIMIT, DAILY_WINDOW_SECONDS, day * DAILY_WINDOW_SECONDS,
             )
         )
+    updates = [
+        _usage_update(
+            scope, key=window.key, window_start=window.window_start,
+            expires_at=current_epoch + (2 * window.duration), limit=window.limit,
+        )
+        for window in windows
+    ]
+    dynamodb = aws_client("dynamodb")
     try:
-        aws_client("dynamodb").transact_write_items(TransactItems=updates)
+        dynamodb.transact_write_items(TransactItems=updates)
     except ClientError as exc:
         if exc.response.get("Error", {}).get("Code") in {
             "ConditionalCheckFailedException",
             "TransactionCanceledException",
         }:
-            metric("UsageQuotaExceeded", Action=action)
-            raise UsageQuotaExceeded(retry_after) from exc
+            reasons = exc.response.get("CancellationReasons")
+            exhausted = [
+                windows[index]
+                for index, reason in enumerate(reasons or [])
+                if index < len(windows) and isinstance(reason, Mapping)
+                and reason.get("Code") == "ConditionalCheckFailed"
+            ]
+            # Missing cancellation details must not turn a transient failure into a quota claim.
+            if not reasons:
+                for window, update in zip(windows, updates):
+                    item = dynamodb.get_item(
+                        TableName=PROJECT_TABLE, Key=update["Update"]["Key"],
+                        ProjectionExpression="requestCount", ConsistentRead=True,
+                    ).get("Item", {})
+                    if int(item.get("requestCount", {}).get("N", "0")) >= window.limit:
+                        exhausted.append(window)
+            if exhausted:
+                window = max(exhausted, key=lambda value: value.resets_at)
+                metric("UsageQuotaExceeded", Action=action)
+                LOGGER.info(json.dumps({
+                    "event": "ai_usage_limit_reached", "action": action,
+                    "quotaKind": window.kind, "limit": window.limit,
+                    "resetsAt": window.resets_at,
+                }))
+                raise UsageQuotaExceeded(window, current_epoch) from exc
         raise
 
 
@@ -1461,14 +1516,18 @@ def handler(event: object, _context: Any) -> dict[str, Any]:
             return _get_artifact(event, artifact_type)
         return response(event, 404, {"error": "Route not found"})
     except UsageQuotaExceeded as exc:
-        return response(
+        result = response(
             event,
             429,
             {
                 "error": str(exc),
+                "errorCode": "AI_USAGE_LIMIT",
                 "retryAfterSeconds": exc.retry_after_seconds,
+                "quota": exc.quota,
             },
         )
+        result["headers"]["retry-after"] = str(exc.retry_after_seconds)
+        return result
     except GenerationDisabled as exc:
         return response(event, 503, {"error": str(exc)})
     except ScopeAuthorizationError:

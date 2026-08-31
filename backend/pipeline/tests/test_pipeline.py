@@ -1108,7 +1108,10 @@ class JobsApiTests(unittest.TestCase):
                         "Error": {
                             "Code": "TransactionCanceledException",
                             "Message": "quota reached",
-                        }
+                        },
+                        "CancellationReasons": [
+                            {"Code": "ConditionalCheckFailed"}, {"Code": "None"},
+                        ],
                     },
                     "TransactWriteItems",
                 )
@@ -1130,7 +1133,99 @@ class JobsApiTests(unittest.TestCase):
         body = json.loads(response["body"])
         self.assertEqual(response["statusCode"], 429)
         self.assertIn("AI usage limit", body["error"])
-        self.assertGreater(body["retryAfterSeconds"], 0)
+        self.assertIn("Demo hourly", body["error"])
+        self.assertEqual(body["retryAfterSeconds"], 3599)
+        self.assertEqual(response["headers"]["retry-after"], "3599")
+        self.assertEqual(body["errorCode"], "AI_USAGE_LIMIT")
+        self.assertEqual(body["quota"]["kind"], "guest_hourly")
+        self.assertEqual(body["quota"]["resetsAt"], "1970-01-01T02:00:00+00:00")
+
+    def test_quota_reports_the_actual_daily_or_model_window(self):
+        cases = [
+            (SCOPE, "nova-pro", ["None", "ConditionalCheckFailed"], "guest_daily", 200),
+            (SCOPE, "nova-pro", ["ConditionalCheckFailed", "ConditionalCheckFailed"], "guest_daily", 200),
+            (AUTH_BLUE_SCOPE, "nova-pro", ["ConditionalCheckFailed", "None"], "tenant_daily", 500),
+            (AUTH_BLUE_SCOPE, "nova-pro", ["None", "ConditionalCheckFailed"], "user_daily", 100),
+            (AUTH_BLUE_SCOPE, "claude-sonnet-4.6", ["None", "None", "ConditionalCheckFailed"], "claude_daily", 5),
+        ]
+        for scope, model, codes, kind, limit in cases:
+            with self.subTest(kind=kind, codes=codes):
+                error = ClientError({
+                    "Error": {"Code": "TransactionCanceledException"},
+                    "CancellationReasons": [{"Code": code} for code in codes],
+                })
+                with (
+                    patch.object(api, "aws_client") as client,
+                    patch.object(api, "now_epoch", return_value=3601),
+                    patch.object(api, "GUEST_DAILY_AI_LIMIT", 200),
+                    patch.object(api, "AUTH_USER_DAILY_AI_LIMIT", 100),
+                    patch.object(api, "AUTH_TENANT_DAILY_AI_LIMIT", 500),
+                    patch.object(api, "CLAUDE_DAILY_AI_LIMIT", 5),
+                    patch.object(api, "metric"),
+                ):
+                    client.return_value.transact_write_items.side_effect = error
+                    with self.assertRaises(api.UsageQuotaExceeded) as raised:
+                        api._consume_usage_quota(scope, "handoff.generate", model)
+                self.assertEqual(raised.exception.quota["kind"], kind)
+                self.assertEqual(raised.exception.quota["limit"], limit)
+                self.assertEqual(raised.exception.retry_after_seconds, 82799)
+                client.return_value.get_item.assert_not_called()
+
+    def test_transaction_conflict_is_not_reported_as_exhausted_usage(self):
+        error = ClientError({
+            "Error": {"Code": "TransactionCanceledException"},
+            "CancellationReasons": [{"Code": "TransactionConflict"}, {"Code": "None"}],
+        })
+        with patch.object(api, "aws_client") as client, patch.object(api, "metric") as metric:
+            client.return_value.transact_write_items.side_effect = error
+            with self.assertRaises(ClientError) as raised:
+                api._consume_usage_quota(SCOPE, "handoff.generate", "nova-pro")
+        self.assertIs(raised.exception, error)
+        client.return_value.get_item.assert_not_called()
+        metric.assert_not_called()
+
+    def test_missing_cancellation_details_require_confirmed_exhaustion(self):
+        for count in (0, 12, 20):
+            with self.subTest(count=count):
+                error = ClientError({"Error": {"Code": "TransactionCanceledException"}})
+                with (
+                    patch.object(api, "aws_client") as client,
+                    patch.object(api, "now_epoch", return_value=3601),
+                    patch.object(api, "GUEST_HOURLY_AI_LIMIT", 20),
+                    patch.object(api, "GUEST_DAILY_AI_LIMIT", 200),
+                    patch.object(api, "metric"),
+                ):
+                    client.return_value.transact_write_items.side_effect = error
+                    client.return_value.get_item.return_value = {"Item": {"requestCount": {"N": str(count)}}}
+                    expected = api.UsageQuotaExceeded if count == 20 else ClientError
+                    with self.assertRaises(expected) as raised:
+                        api._consume_usage_quota(SCOPE, "handoff.generate", "nova-pro")
+                self.assertEqual(client.return_value.get_item.call_count, 2)
+                for call in client.return_value.get_item.call_args_list:
+                    self.assertTrue(call.kwargs["ConsistentRead"])
+                    self.assertEqual(call.kwargs["ProjectionExpression"], "requestCount")
+                if count == 20:
+                    self.assertEqual(raised.exception.quota["kind"], "guest_hourly")
+                    self.assertEqual(raised.exception.retry_after_seconds, 3599)
+                else:
+                    self.assertIs(raised.exception, error)
+
+    def test_demo_limit_defaults_and_transactions_use_twenty_and_two_hundred(self):
+        template = (BACKEND_ROOT.parent / "infrastructure/jobs-pipeline.yaml").read_text(encoding="utf-8")
+        deploy = (BACKEND_ROOT.parent / "scripts/deploy-jobs-pipeline.ps1").read_text(encoding="utf-8")
+        self.assertIn("GuestHourlyAiLimit:\n    Type: Number\n    Default: 20", template)
+        self.assertIn("GuestDailyAiLimit:\n    Type: Number\n    Default: 200", template)
+        self.assertIn("$GuestHourlyAiLimit = 20", deploy)
+        self.assertIn("$GuestDailyAiLimit = 200", deploy)
+        with (
+            patch.object(api, "aws_client") as client,
+            patch.object(api, "GUEST_HOURLY_AI_LIMIT", 20),
+            patch.object(api, "GUEST_DAILY_AI_LIMIT", 200),
+        ):
+            api._consume_usage_quota(SCOPE, "handoff.generate", "nova-pro")
+        updates = client.return_value.transact_write_items.call_args.kwargs["TransactItems"]
+        self.assertEqual([item["Update"]["ExpressionAttributeValues"][":limit"]["N"] for item in updates], ["20", "200"])
+        self.assertTrue(all("requestCount < :limit" in item["Update"]["ConditionExpression"] for item in updates))
 
     def test_control_actions_do_not_consume_the_ai_quota(self):
         with patch.object(api, "aws_client") as client:

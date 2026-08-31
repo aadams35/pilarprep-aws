@@ -26,9 +26,9 @@ param(
   [ValidateSet("true", "false")]
   [string]$LiveAiEnabled = "true",
   [ValidateRange(1, 100)]
-  [int]$GuestHourlyAiLimit = 12,
+  [int]$GuestHourlyAiLimit = 20,
   [ValidateRange(1, 500)]
-  [int]$GuestDailyAiLimit = 30,
+  [int]$GuestDailyAiLimit = 200,
   [ValidateRange(1, 2000)]
   [int]$AuthUserDailyAiLimit = 100,
   [ValidateRange(1, 10000)]

@@ -27,6 +27,14 @@ The frontend slows unchanged job-status polls up to five seconds apart. A 429 re
 
 WAF rate-limit changes require an explicit security review. The frontend recovery fix does not change WAF, bypass CloudFront, relax sign-in requirements, or skip GuardDuty. The existing edge limit may still be reached by multiple users sharing an IP until an approved policy change separates submissions from polling traffic.
 
+## Demo AI Usage Limits
+
+The demo allowance is 20 AI submissions per guest identity per UTC clock hour and 200 per UTC day, shared across that identity's clients and sessions. Nova Pro remains the standard packet model. Authenticated-user (100/day), workspace (500/day), and Claude (5/day) caps are unchanged. These are application admission limits, not Bedrock credits or an AWS billing balance. They are not a global spending ceiling.
+
+The counters record new AI submission attempts, including jobs that later fail; processing time and internal model retries do not consume extra submissions. Polling, downloads, and approval do not consume the AI allowance. Reusing an already-recorded idempotency key returns its existing job without consuming another submission.
+
+A rejected request returns `AI_USAGE_LIMIT`, the exhausted hourly/daily window, `quota.resetsAt`, and a matching `Retry-After` header. When more than one cap is exhausted, the later reset governs. Database transaction conflicts are not quota exhaustion. Increasing a configured limit preserves the existing usage counts; do not delete counters to apply a new allowance.
+
 ## Slow Handoff Generation
 
 Compare queue wait with worker duration before increasing concurrency. A handoff on August 31 waited 24 ms in SQS but took 181 seconds in the worker, including Strands structured-output recovery. The queue was not the bottleneck.

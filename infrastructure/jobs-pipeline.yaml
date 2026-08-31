@@ -94,13 +94,13 @@ Parameters:
     AllowedValues: ["true", "false"]
   GuestHourlyAiLimit:
     Type: Number
-    Default: 12
+    Default: 20
     MinValue: 1
     MaxValue: 100
     Description: Maximum AI actions per trusted guest identity per hour.
   GuestDailyAiLimit:
     Type: Number
-    Default: 30
+    Default: 200
     MinValue: 1
     MaxValue: 500
   AuthUserDailyAiLimit:
