@@ -4,7 +4,7 @@ Use the same labels as the [architecture diagram](pilarprep-aws-architecture.png
 
 | Diagram component | Application code | Infrastructure |
 | --- | --- | --- |
-| PilarPrep React app (shown at Users) | [App](../../frontend/src/App.tsx), [browser clients](../../frontend/src/lib/) | [Frontend](../../infrastructure/frontend.yaml) |
+| PilarPrep React app | [App](../../frontend/src/App.tsx), [browser clients](../../frontend/src/lib/) | [Frontend](../../infrastructure/frontend.yaml) |
 | Route 53 | DNS lookup only; no application handler | Live `pilarprep.app` public hosted zone with A/AAAA aliases to CloudFront; DNS is configured separately from the [frontend template](../../infrastructure/frontend.yaml), as described in [deployment](../../DEPLOYMENT.md) |
 | CloudFront and frontend S3 | [Browser entry](../../frontend/src/main.tsx), [build](../../vite.config.ts) | [Frontend](../../infrastructure/frontend.yaml) |
 | AWS Certificate Manager | HTTPS certificate; no application handler | Existing ACM certificate supplied through `AcmCertificateArn` in the [frontend template](../../infrastructure/frontend.yaml) |
@@ -28,9 +28,9 @@ Use the same labels as the [architecture diagram](pilarprep-aws-architecture.png
 | EventBridge: scan result | [Scan event handler](../../backend/ai_worker/handler.py) | [GuardDuty event rule and queue policy](../../infrastructure/jobs-pipeline.yaml) |
 | Amazon Transcribe | [Transcription start/result handling](../../backend/pipeline/meeting.py) | [Worker permissions](../../infrastructure/jobs-pipeline.yaml) |
 | EventBridge: transcript ready | [Transcript continuation](../../backend/ai_worker/handler.py) | [Transcribe event rule](../../infrastructure/jobs-pipeline.yaml) |
-| CloudWatch, X-Ray, and SNS | [Job metrics](../../backend/pipeline/state.py), [worker diagnostics](../../backend/ai_worker/handler.py) | [Logs, Lambda tracing, dashboard, alarms, and notification topic](../../infrastructure/jobs-pipeline.yaml) |
-| AWS KMS | Encryption through AWS service configuration | [Application encryption key](../../infrastructure/bedrock.yaml), [data and queue key settings](../../infrastructure/jobs-pipeline.yaml) |
-| Secrets Manager and IAM | [Application scope](../../backend/pipeline/state.py), [agent scope validation](../../backend/agentcore/common/security.py) | [API-origin secret and service roles](../../infrastructure/jobs-pipeline.yaml), [scope secret and agent roles](../../infrastructure/agentcore.yaml) |
+| CloudWatch, X-Ray, and SNS (not expanded in the diagram) | [Job metrics](../../backend/pipeline/state.py), [worker diagnostics](../../backend/ai_worker/handler.py) | [Logs, Lambda tracing, dashboard, alarms, and notification topic](../../infrastructure/jobs-pipeline.yaml) |
+| AWS KMS (not expanded in the diagram) | Encryption through AWS service configuration | [Application encryption key](../../infrastructure/bedrock.yaml), [data and queue key settings](../../infrastructure/jobs-pipeline.yaml) |
+| Secrets Manager and IAM (not expanded in the diagram) | [Application scope](../../backend/pipeline/state.py), [agent scope validation](../../backend/agentcore/common/security.py) | [API-origin secret and service roles](../../infrastructure/jobs-pipeline.yaml), [scope secret and agent roles](../../infrastructure/agentcore.yaml) |
 
 ## Follow One Request
 
