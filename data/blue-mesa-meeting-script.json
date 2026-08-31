@@ -215,7 +215,7 @@
       "id": "segment-34",
       "speakerLabel": "spk_1",
       "voiceId": "Stephen",
-      "text": "PilarPrep should show those three groups separately with speaker and timestamp evidence. It must wait for human review before changing the brief or project memory. Accepted updates should then drive the follow up brief and implementation handoff."
+      "text": "I will document three BlueMesa sections: what we confirmed, what we corrected, and what remains open, each tied to the speaker and timestamp. Ariana and the named owners will review that record before the team changes the working brief or project record. Once approved, those updates will shape the next discovery session and implementation handoff."
     }
   ]
 }
