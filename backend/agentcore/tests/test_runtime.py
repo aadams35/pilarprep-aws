@@ -691,23 +691,33 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(captured["agent_id"], "pilarprep-handoff-repair")
 
     def test_guarded_user_content_excludes_approved_evidence(self):
-        guarded = json.loads(
-            runtime_service._guarded_user_content(
-                {
-                    "focus": "Prepare the evidence plan.",
-                    "approvedMeetingOutcomes": "Customer-approved notes.",
-                    "latestApprovedBrief": {"technical": ["Trusted brief"]},
-                    "currentProjectState": {"risks": ["Trusted state"]},
-                }
-            )
-        )
-        self.assertEqual(
-            guarded,
+        guarded = runtime_service._guarded_user_content(
             {
                 "focus": "Prepare the evidence plan.",
                 "approvedMeetingOutcomes": "Customer-approved notes.",
-            },
+                "latestApprovedBrief": {"technical": ["Trusted brief"]},
+                "currentProjectState": {"risks": ["Trusted state"]},
+            }
         )
+        self.assertEqual(
+            guarded,
+            "User focus:\nPrepare the evidence plan.\n\n"
+            "Approved meeting outcomes:\nCustomer-approved notes.",
+        )
+        self.assertNotIn("Trusted brief", guarded)
+        self.assertNotIn("Trusted state", guarded)
+
+    def test_model_guardrail_content_is_bounded_after_full_input_screening(self):
+        guarded = runtime_service._guarded_user_content(
+            {
+                "focus": "focus-start " + ("F" * 5_000),
+                "approvedMeetingOutcomes": ("O" * 5_000) + " outcomes-end",
+            }
+        )
+        self.assertEqual(len(guarded), runtime_service.MODEL_GUARDRAIL_INPUT_CHARS)
+        self.assertTrue(guarded.startswith("User focus:\nfocus-start"))
+        self.assertTrue(guarded.endswith("outcomes-end"))
+        self.assertIn("screened in full before model invocation", guarded)
 
     def test_handoff_context_preserves_facts_and_assessments_without_duplicate_history(self):
         approved = json.loads(json.dumps(HANDOFF_PAYLOAD["approvedBrief"]))
