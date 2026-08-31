@@ -187,6 +187,15 @@ Each plan and register should contain enough concrete detail to support the next
 Return 3-6 immediate next-step actions with named owners, timing, dependencies, and decision gates.
 Generate nextSteps once under projectArtifacts. PilarPrep copies that validated object into project state."""
 
+HANDOFF_CONTENT_GUIDANCE = """Write the actual customer handoff in the output tool arguments, never schema labels or example placeholders.
+- projectAnswer: write 180-260 words connecting the named customer's business outcomes, confirmed current state, people, unresolved assumptions, and the next meeting decision. Do not return a heading or a description of this field.
+- twoWeekPlan, riskRegister, and stakeholderMap: each requires 2-12 concrete items. Prefer a focused set; use 25-50 words per detail, with explicit owners and timing. Do not invent people to fill a list.
+- nextSteps: return 3-6 immediateActions and 2-5 openQuestions, plus the nextMeeting purpose, timing, and attendees. customerSummary needs at least 40 characters; internalNotes needs at least 30 characters.
+- followUpEmail: include an actual customer-specific subject and body of at least 40 characters, not instructions for writing an email.
+- projectUpdate: preserve confirmed decisions and commitments from currentProjectState. Keep register details concise and do not repeat the full narrative in every register. Generate nextSteps only under projectArtifacts.
+- Cite only exact allowedSourceLabels. Use concrete approved facts; distinguish unsupported assumptions and unknown owners explicitly.
+Complete the structured output in one submission, without writing a separate draft first."""
+
 
 CATCHUP_SYSTEM_PROMPT = """You are the PilarPrep role-aware catch-up agent for AWS customer teams.
 Use only the approved brief, approved meeting outcomes, current project state, and memory supplied in the request.
@@ -204,7 +213,7 @@ def _handoff_output_model() -> type[Any]:
     if _HANDOFF_OUTPUT_MODEL is not None:
         return _HANDOFF_OUTPUT_MODEL
 
-    from pydantic import BaseModel
+    from pydantic import BaseModel, Field
 
     class AgentArtifactItem(BaseModel):
         title: str
@@ -214,7 +223,7 @@ def _handoff_output_model() -> type[Any]:
 
     class AgentFollowUpEmail(BaseModel):
         subject: str
-        body: str
+        body: str = Field(min_length=40, description="The actual customer-specific follow-up email, not a template instruction.")
 
     class AgentImmediateAction(BaseModel):
         action: str
@@ -229,16 +238,16 @@ def _handoff_output_model() -> type[Any]:
         attendees: list[str]
 
     class AgentNextSteps(BaseModel):
-        immediateActions: list[AgentImmediateAction]
-        openQuestions: list[str]
+        immediateActions: list[AgentImmediateAction] = Field(min_length=3, max_length=6)
+        openQuestions: list[str] = Field(min_length=2, max_length=5)
         nextMeeting: AgentNextMeeting
-        customerSummary: str
-        internalNotes: str
+        customerSummary: str = Field(min_length=40)
+        internalNotes: str = Field(min_length=30)
 
     class AgentProjectArtifacts(BaseModel):
-        twoWeekPlan: list[AgentArtifactItem]
-        riskRegister: list[AgentArtifactItem]
-        stakeholderMap: list[AgentArtifactItem]
+        twoWeekPlan: list[AgentArtifactItem] = Field(min_length=2, max_length=12)
+        riskRegister: list[AgentArtifactItem] = Field(min_length=2, max_length=12)
+        stakeholderMap: list[AgentArtifactItem] = Field(min_length=2, max_length=12)
         followUpEmail: AgentFollowUpEmail
         nextSteps: AgentNextSteps
 
@@ -255,10 +264,13 @@ def _handoff_output_model() -> type[Any]:
         openQuestions: list[AgentRegisterItem]
 
     class AgentHandoffOutput(BaseModel):
-        projectAnswer: str
+        projectAnswer: str = Field(
+            min_length=80, max_length=12_000,
+            description="Write a 180-260 word customer-specific handoff connecting approved facts, outcomes, owners, assumptions, and the next decision. Not a title or schema description.",
+        )
         projectArtifacts: AgentProjectArtifacts
         projectUpdate: AgentProjectUpdate
-        citations: list[str]
+        citations: list[str] = Field(min_length=1, description="Exact labels from allowedSourceLabels.")
 
     _HANDOFF_OUTPUT_MODEL = AgentHandoffOutput
     return AgentHandoffOutput
@@ -434,7 +446,7 @@ def _invoke_direct_json_reasoner(
             "messages": [{"role": "user", "content": message_content}],
             "inferenceConfig": {
                 "temperature": 0.1,
-                "maxTokens": 6000 if _is_claude_sonnet_46(model_id) else 5000,
+                "maxTokens": 8000 if _is_claude_sonnet_46(model_id) else 5000,
             },
         }
         if not _is_claude_sonnet_46(model_id):
@@ -531,7 +543,7 @@ def _validate_agent_result(value: object) -> dict[str, Any]:
         raise ValueError("Agent result must be an object")
     answer = value.get("projectAnswer")
     if not isinstance(answer, str) or len(answer.strip()) < 80:
-        raise ValueError("Agent result requires a detailed projectAnswer")
+        raise ValueError("Agent result requires a detailed projectAnswer of at least 80 characters, not a heading or schema placeholder")
     artifacts = value.get("projectArtifacts")
     if not isinstance(artifacts, Mapping):
         raise ValueError("Agent result requires projectArtifacts")
@@ -918,7 +930,7 @@ def _default_reasoner(
         "model_id": model_id,
         "region_name": os.getenv("AWS_REGION", "us-east-1"),
         "temperature": 0.1,
-        "max_tokens": 6000 if _is_claude_sonnet_46(model_id) else 5000,
+        "max_tokens": 8000 if _is_claude_sonnet_46(model_id) else 5000,
         "streaming": False,
         "boto_client_config": _bedrock_client_config(),
     }
@@ -939,12 +951,13 @@ def _default_reasoner(
 
     output_model = _handoff_output_model()
     # The schema is a tool result, not a second pass over a separately written JSON draft.
-    system_prompt = SYSTEM_PROMPT.replace(
+    system_prompt = SYSTEM_PROMPT.split("\nRequired JSON shape:\n", 1)[0].replace(
         "- Return JSON only. Do not wrap it in Markdown.",
         f"- Submit the complete handoff directly through the {output_model.__name__} "
-        "structured-output tool. The required JSON shape describes its arguments. "
+        "structured-output tool using its declared schema. "
         "Do not first write a separate narrative or JSON draft.",
     )
+    system_prompt += "\n" + HANDOFF_CONTENT_GUIDANCE
     agent = Agent(
         model=BedrockModel(**model_options),
         system_prompt=system_prompt,

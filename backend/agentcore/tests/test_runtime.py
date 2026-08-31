@@ -921,12 +921,37 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual(captured["agent"]["session_manager"], {"memory": "available"})
                 self.assertIn("directly through the StructuredOutput", captured["agent"]["system_prompt"])
                 self.assertNotIn("- Return JSON only.", captured["agent"]["system_prompt"])
+                self.assertNotIn("Required JSON shape:", captured["agent"]["system_prompt"])
+                self.assertNotIn("A detailed role-aware handoff or catch-up narrative", captured["agent"]["system_prompt"])
+                self.assertIn("180-260 words", captured["agent"]["system_prompt"])
+                self.assertEqual(captured["model"]["max_tokens"], 8000 if "claude" in model_id else 5000)
                 self.assertEqual(captured["output"]["structured_output_model"], StructuredOutput)
                 self.assertIn("guardContent", captured["prompt"][1])
                 if "nova-pro" in model_id:
                     self.assertEqual(captured["model"]["additional_args"], {"performanceConfig": {"latency": "optimized"}})
                 else:
                     self.assertNotIn("additional_args", captured["model"])
+
+    def test_handoff_tool_schema_rejects_placeholder_narrative_and_incomplete_artifacts(self):
+        from pydantic import ValidationError
+
+        output_model = runtime_service._handoff_output_model()
+        schema = output_model.model_json_schema()
+        self.assertEqual(schema["properties"]["projectAnswer"]["minLength"], 80)
+        self.assertEqual(schema["$defs"]["AgentNextSteps"]["properties"]["immediateActions"]["minItems"], 3)
+        self.assertEqual(schema["$defs"]["AgentProjectArtifacts"]["properties"]["riskRegister"]["minItems"], 2)
+        output_model.model_validate(MODEL_RESULT)
+        for field in ("projectAnswer", "riskRegister", "immediateActions"):
+            with self.subTest(field=field):
+                invalid = json.loads(json.dumps(MODEL_RESULT))
+                if field == "projectAnswer":
+                    invalid[field] = "A detailed role-aware handoff or catch-up narrative"
+                elif field == "riskRegister":
+                    invalid["projectArtifacts"][field] = invalid["projectArtifacts"][field][:1]
+                else:
+                    invalid["projectArtifacts"]["nextSteps"][field] = []
+                with self.assertRaises(ValidationError):
+                    output_model.model_validate(invalid)
 
     def test_structured_handoff_repair_does_not_request_another_text_draft(self):
         prompts = []
