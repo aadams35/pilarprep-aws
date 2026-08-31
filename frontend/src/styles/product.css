@@ -2169,28 +2169,6 @@ textarea:focus-visible {
   line-height: 1.5;
 }
 
-.meeting-demo-badge {
-  min-width: 190px;
-  border-left: 3px solid var(--pp-orange);
-  padding: 0.35rem 0 0.35rem 0.75rem;
-}
-
-.meeting-demo-badge strong,
-.meeting-demo-badge span {
-  display: block;
-}
-
-.meeting-demo-badge strong {
-  color: var(--pp-ink);
-  font-size: 0.74rem;
-}
-
-.meeting-demo-badge span {
-  margin-top: 0.12rem;
-  color: var(--pp-muted);
-  font-size: 0.63rem;
-}
-
 .meeting-intelligence-flow {
   display: grid;
   grid-template-columns: repeat(7, minmax(122px, 1fr));
@@ -4189,7 +4167,6 @@ textarea:focus-visible {
 .meeting-audio-empty button, .meeting-audio-file button { border: 1px solid #60758a; background: #fff; color: #243647; min-height: 38px; padding: 0 14px; font-weight: 750; }
 .meeting-audio-file > div:last-child { display: flex; gap: 8px; }
 .meeting-audio-actions { display: flex; flex: 0 0 auto; gap: 8px; }
-.meeting-audio-empty button.meeting-audio-download { border-color: #9a6a24; color: #74501d; }
 
 .precall-handoff-status { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px 12px; margin-top: 14px; color: #506071; font-size: 0.82rem; }
 .precall-handoff-status strong { color: #294252; }

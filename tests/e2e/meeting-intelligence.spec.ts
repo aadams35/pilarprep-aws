@@ -333,8 +333,9 @@ test("meeting intelligence stays readable through transcription and human review
   await page.getByRole("navigation", { name: "Customer lifecycle" }).getByRole("button", { name: /Meet/ }).click();
   const workspace = page.locator(".meeting-intelligence");
   await expect(workspace).toBeVisible();
-  await expect(workspace.getByText("Synthetic demo", { exact: true })).toBeVisible();
-  await expect(workspace.getByRole("button", { name: "Get demo MP3" })).toBeVisible();
+  await expect(workspace.getByText("Synthetic demo", { exact: true })).toHaveCount(0);
+  await expect(workspace.getByRole("button", { name: "Get demo MP3" })).toHaveCount(0);
+  await expect(page.getByText("Synthetic demo data only", { exact: true })).toHaveCount(0);
   await expect(workspace.getByRole("button", { name: "Choose audio" })).toBeDisabled();
   await workspace.getByRole("checkbox").check();
   await expect(workspace.getByRole("button", { name: "Choose audio" })).toBeEnabled();
@@ -434,7 +435,8 @@ test("signed-out users can see Step 4 but cannot upload private meeting audio", 
   const workspace = page.locator(".meeting-intelligence");
   await expect(workspace.getByText("Sign in before uploading meeting audio")).toBeVisible();
   await expect(workspace.getByRole("button", { name: "Sign in" })).toBeEnabled();
-  await expect(workspace.getByRole("button", { name: "Get demo MP3" })).toBeDisabled();
+  await expect(workspace.getByRole("button", { name: "Get demo MP3" })).toHaveCount(0);
+  await expect(page.getByText("Synthetic demo data only", { exact: true })).toHaveCount(0);
   await expect(workspace.getByRole("button", { name: "Choose audio" })).toBeDisabled();
   await expect(workspace.getByRole("checkbox")).toBeDisabled();
 });

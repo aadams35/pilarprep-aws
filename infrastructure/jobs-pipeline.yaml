@@ -3,6 +3,16 @@ Transform: AWS::Serverless-2016-10-31
 Description: PilarPrep unified HTTPS and SQS AI job pipeline
 
 Parameters:
+  MeetingEvidenceBucketName:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"
+    Description: Explicit meeting storage name. Migrate evidence and rescan uploads before cutover.
+  EvidenceVectorBucketName:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"
+    Description: Explicit S3 Vectors name. Reingest approved evidence after replacement.
   ResourcePrefix:
     Type: String
     Default: pillarprep-demo
@@ -124,6 +134,8 @@ Parameters:
     MaxValue: 2
 
 Conditions:
+  HasMeetingEvidenceBucketName: !Not [!Equals [!Ref MeetingEvidenceBucketName, ""]]
+  HasEvidenceVectorBucketName: !Not [!Equals [!Ref EvidenceVectorBucketName, ""]]
   HasSecondaryAllowedOrigin: !Not [!Equals [!Ref SecondaryAllowedOrigin, ""]]
   HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, ""]]
   HasDataKmsKey: !Not [!Equals [!Ref DataKmsKeyArn, ""]]
@@ -381,6 +393,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
+      BucketName: !If [HasMeetingEvidenceBucketName, !Ref MeetingEvidenceBucketName, !Ref AWS::NoValue]
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -424,7 +437,7 @@ Resources:
               NoncurrentDays: 1
       Tags:
         - Key: Name
-          Value: !Sub "${ResourcePrefix}-meeting-evidence"
+          Value: !Sub "pilarprep-${EnvironmentName}-meeting-evidence"
         - Key: Project
           Value: !Ref ProjectName
         - Key: Application
@@ -442,6 +455,8 @@ Resources:
 
   MeetingEvidenceBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Bucket: !Ref MeetingEvidenceBucket
       PolicyDocument:
@@ -591,6 +606,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
+      VectorBucketName: !If [HasEvidenceVectorBucketName, !Ref EvidenceVectorBucketName, !Ref AWS::NoValue]
       EncryptionConfiguration:
         SseType: !If [HasDataKmsKey, "aws:kms", AES256]
         KmsKeyArn: !If
@@ -598,6 +614,8 @@ Resources:
           - !Ref DataKmsKeyArn
           - !Ref AWS::NoValue
       Tags:
+        - Key: Name
+          Value: !Sub "pilarprep-${EnvironmentName}-evidence-vectors"
         - Key: Project
           Value: !Ref ProjectName
         - Key: Environment
@@ -713,6 +731,8 @@ Resources:
 
   BlueMesaKnowledgeBase:
     Type: AWS::Bedrock::KnowledgeBase
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     DependsOn: BlueMesaVectorBucketPolicy
     Properties:
       Name: !Sub "PilarPrepAuthorizedEvidence-${KnowledgeBaseGeneration}"
@@ -738,6 +758,8 @@ Resources:
 
   BlueMesaKnowledgeBaseDataSource:
     Type: AWS::Bedrock::DataSource
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       KnowledgeBaseId: !Ref BlueMesaKnowledgeBase
       Name: !Sub "PilarPrepAuthorizedEvidenceSource-${KnowledgeBaseGeneration}"

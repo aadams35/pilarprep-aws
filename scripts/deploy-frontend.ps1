@@ -2,6 +2,7 @@ param(
   [string]$StackName = "pillarprep-frontend",
   [string]$Region = "us-east-1",
   [string]$BucketName = "",
+  [string]$CloudFrontName = "",
   [string]$ResourcePrefix = "pillarprep-demo",
   [string]$ProjectName = "PilarPrep",
   [string]$EnvironmentName = "demo",
@@ -23,6 +24,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "resource-names.ps1")
 
 function Require-Command($Name) {
   if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -65,7 +67,11 @@ if ([string]$identityArn -match ":root$") {
 }
 
 if (-not $BucketName) {
-  $BucketName = "pillarprep-frontend-$accountId-$Region".ToLowerInvariant()
+  $defaultFrontendName = Get-PilarPrepStorageName -Purpose "web-assets" -AccountId $accountId -Region $Region -EnvironmentName $EnvironmentName
+  $BucketName = Resolve-PilarPrepBucketParameter -StackName $StackName -ParameterName "FrontendBucketName" -DefaultName $defaultFrontendName -Region $Region
+}
+if (-not $CloudFrontName) {
+  $CloudFrontName = "pilarprep-$EnvironmentName-web"
 }
 
 Write-Host "Using AWS account $accountId in $Region"
@@ -196,6 +202,7 @@ $parameterOverrides = @(
   "Owner=$Owner",
   "CostCenter=$CostCenter",
   "FrontendBucketName=$BucketName",
+  "CloudFrontName=$CloudFrontName",
   "WebACLId=$WebACLId",
   "CloudFrontPriceClass=$CloudFrontPriceClass",
   "CustomDomainName=$CustomDomainName",

@@ -92,6 +92,7 @@ The [model evaluation guide](evals/README.md) includes 28 synthetic scenarios fo
 ## Further Reading
 
 - [Deployment](DEPLOYMENT.md): prerequisites, stack order, configuration, and validation.
+- [Resource names](docs/resource-names.md): physical storage names, migration safeguards, and rollback retention.
 - [Security](SECURITY.md): demo boundaries, reporting, and known production gaps.
 - [Operations](docs/operations.md): failed jobs, DLQ handling, audio events, and cost controls.
 - [Engineering decisions](docs/engineering-decisions.md): tradeoffs and remaining work.

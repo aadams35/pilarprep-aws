@@ -36,6 +36,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "resource-names.ps1")
 
 function Require-Command($Name) {
   if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -116,7 +117,7 @@ if ([string]$identityArn -match ":root$") {
 }
 
 if (-not $PackagingBucket) {
-  $PackagingBucket = "pillarprep-deploy-$accountId-$Region".ToLowerInvariant()
+  $PackagingBucket = Get-PilarPrepStorageName -Purpose "deployments" -AccountId $accountId -Region $Region -EnvironmentName $EnvironmentName
 }
 
 $backendOutputs = Invoke-Aws cloudformation describe-stacks `

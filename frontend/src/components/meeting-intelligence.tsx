@@ -37,10 +37,8 @@ type MeetingIntelligenceProps = {
   notice: string;
   isProcessing: boolean;
   isApproving: boolean;
-  isDownloadingDemo: boolean;
   audio: MeetingAudioSelection;
   onSignIn: () => void;
-  onDownloadDemoAudio: () => void;
   onUploadAudio: (file: File, consentAcknowledged: boolean) => void;
   onRemoveAudio: () => void;
   onProcess: () => void;
@@ -116,10 +114,8 @@ export function MeetingIntelligence({
   notice,
   isProcessing,
   isApproving,
-  isDownloadingDemo,
   audio,
   onSignIn,
-  onDownloadDemoAudio,
   onUploadAudio,
   onRemoveAudio,
   onProcess,
@@ -221,12 +217,8 @@ export function MeetingIntelligence({
           <p>Meeting intelligence</p>
           <h2 id="meeting-intelligence-title">Turn the conversation into governed project context</h2>
           <span>
-            Upload the synthetic BlueMesa call, compare it with the approved brief, then choose what becomes project truth.
+            Compare the meeting recording with the approved brief, then review the proposed updates.
           </span>
-        </div>
-        <div className="meeting-demo-badge">
-          <strong>Synthetic demo</strong>
-          <span>Names and speaker context remain in private storage</span>
         </div>
       </header>
 
@@ -311,17 +303,9 @@ export function MeetingIntelligence({
           <div className="meeting-audio-empty">
             <div>
               <strong>Upload the meeting recording</strong>
-              <span>Download the BlueMesa demo call or choose your local MP3, WAV, or M4A file. Nothing is preloaded.</span>
+              <span>Choose an MP3, WAV, or M4A file.</span>
             </div>
             <div className="meeting-audio-actions">
-              <button
-                className="meeting-audio-download"
-                type="button"
-                disabled={!canUsePrivateAudio || isDownloadingDemo}
-                onClick={onDownloadDemoAudio}
-              >
-                {isDownloadingDemo ? "Preparing MP3..." : "Get demo MP3"}
-              </button>
               <button
                 type="button"
                 disabled={!canUsePrivateAudio || !consentAcknowledged}

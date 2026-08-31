@@ -1066,7 +1066,6 @@ export default function App() {
   const [meetingError, setMeetingError] = useState("");
   const [isMeetingProcessing, setIsMeetingProcessing] = useState(false);
   const [isMeetingApproving, setIsMeetingApproving] = useState(false);
-  const [isMeetingAudioDownloading, setIsMeetingAudioDownloading] = useState(false);
   const meetingRequestRef = useRef(false);
   const meetingAbortRef = useRef<AbortController | null>(null);
   const meetingUploadAbortRef = useRef<AbortController | null>(null);
@@ -3589,51 +3588,6 @@ const industryFocus = useMemo(() => {
     }
   }
 
-  async function downloadBlueMesaDemoAudio() {
-    if (scenarioId !== "bluemesa" || !approved || !authSession) {
-      setMeetingError("Sign in and approve the BlueMesa packet before downloading the demo audio.");
-      return;
-    }
-    setIsMeetingAudioDownloading(true);
-    setMeetingError("");
-    setMeetingNotice("");
-    try {
-      const clientId = pipelineClientIdentifier(company);
-      const sessionId = agentSessionId();
-      const response = await workspacePipelineRequest(
-        "meeting-audio/demo?clientId=" +
-          encodeURIComponent(clientId) +
-          "&projectId=" +
-          encodeURIComponent(clientId) +
-          "&sessionId=" +
-          encodeURIComponent(sessionId),
-        "GET"
-      );
-      if (
-        typeof response !== "object" ||
-        response === null ||
-        typeof (response as Record<string, unknown>).downloadUrl !== "string"
-      ) {
-        throw new Error("AWS did not return the BlueMesa demo audio.");
-      }
-      const record = response as { downloadUrl: string; fileName?: string };
-      const anchor = document.createElement("a");
-      anchor.href = record.downloadUrl;
-      anchor.download = record.fileName || "PilarPrep-BlueMesa-Discovery-Meeting.mp3";
-      anchor.rel = "noopener";
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      setMeetingNotice("Demo MP3 download started. Select that file when you are ready to process the call.");
-    } catch (error) {
-      setMeetingError(
-        error instanceof Error ? error.message : "The BlueMesa demo audio could not be downloaded."
-      );
-    } finally {
-      setIsMeetingAudioDownloading(false);
-    }
-  }
-
   function removeMeetingAudio() {
     if (isMeetingProcessing) return;
     meetingUploadAbortRef.current?.abort(
@@ -4129,9 +4083,7 @@ const industryFocus = useMemo(() => {
             <span>{meetingType}</span>
             <span>{industry}</span>
             <span>Top pilar: {selectedPillars[0] ?? "Set ranking"}</span>
-            <span className={cx("access-mode", authSession && "access-mode-private")}>
-              {authSession ? "Private workspace" : "Synthetic demo data only"}
-            </span>
+            {authSession ? <span className="access-mode access-mode-private">Private workspace</span> : null}
           </div>
           <div className="workspace-context-action">
             <span className={cx("stage-state", currentLifecycleStage === "follow-up" && meetingUpdateApproved && "stage-state-complete")}>
@@ -5591,10 +5543,8 @@ const industryFocus = useMemo(() => {
             notice={meetingNotice}
             isProcessing={isMeetingProcessing}
             isApproving={isMeetingApproving}
-            isDownloadingDemo={isMeetingAudioDownloading}
             audio={meetingAudio}
             onSignIn={() => void startWorkspaceLogin()}
-            onDownloadDemoAudio={() => void downloadBlueMesaDemoAudio()}
             onUploadAudio={(file, consentAcknowledged) =>
               void uploadMeetingAudio(file, consentAcknowledged)
             }

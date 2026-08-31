@@ -86,7 +86,7 @@ The optional `smoke:*` commands exercise configured AWS paths and can generate m
 
 ## Deployment Notes
 
-- Templates are in [infrastructure/](infrastructure/). Physical resource names and historical `PILLARPREP_*` environment names are kept for compatibility; renaming files does not justify replacing stateful AWS resources.
+- Templates are in [infrastructure/](infrastructure/). S3 names use `pilarprep-<environment>-<purpose>-<account>-<region>`; CloudFront uses `pilarprep-<environment>-web`. Existing stacks preserve their storage settings until an explicit [retained-data migration](docs/resource-names.md). Historical stack names and `PILLARPREP_*` environment names remain compatible.
 - The active application uses one shared job pipeline. Earlier API/worker and table resources remain in the core templates. Plan their retirement as a separate migration.
 - Stack deletion can leave retained or nonempty resources. Read [operations](docs/operations.md) before cleanup.
 - This repository layout is covered by local packaging and application tests. A new account still requires permissions, quota/model access, regional availability, and a live end-to-end deployment check.

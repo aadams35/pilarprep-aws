@@ -13,6 +13,8 @@ param(
   [string]$Owner = "austin-adams",
   [string]$CostCenter = "hackathon",
   [string]$PackagingBucket = "",
+  [string]$MeetingEvidenceBucketName = "",
+  [string]$EvidenceVectorBucketName = "",
   [string]$PermissionsBoundaryArn = "",
   [string]$DemoAllowedClientIds = "apex-mutual,bluemesa-payments,northstar-health,peakcart-retail,custom-demo",
   [string]$BedrockModelId = "us.amazon.nova-pro-v1:0",
@@ -43,6 +45,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "resource-names.ps1")
 
 function Require-Command($Name) {
   if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -103,7 +106,18 @@ if ([string]$identity.Arn -notmatch "assumed-role/PilarPrepHackathonDeployer/") 
 
 $accountId = $identity.Account
 if (-not $PackagingBucket) {
-  $PackagingBucket = "pillarprep-deploy-$accountId-$Region".ToLowerInvariant()
+  $PackagingBucket = Get-PilarPrepStorageName -Purpose "deployments" -AccountId $accountId -Region $Region -EnvironmentName $EnvironmentName
+}
+if (-not $PSBoundParameters.ContainsKey("MeetingEvidenceBucketName")) {
+  $defaultMeetingName = Get-PilarPrepStorageName -Purpose "meeting-evidence" -AccountId $accountId -Region $Region -EnvironmentName $EnvironmentName
+  $MeetingEvidenceBucketName = Resolve-PilarPrepBucketParameter -StackName $StackName -ParameterName "MeetingEvidenceBucketName" -DefaultName $defaultMeetingName -Region $Region -Profile $Profile
+}
+if (-not $PSBoundParameters.ContainsKey("EvidenceVectorBucketName")) {
+  $defaultVectorName = Get-PilarPrepStorageName -Purpose "evidence-vectors" -AccountId $accountId -Region $Region -EnvironmentName $EnvironmentName
+  $EvidenceVectorBucketName = Resolve-PilarPrepBucketParameter -StackName $StackName -ParameterName "EvidenceVectorBucketName" -DefaultName $defaultVectorName -Region $Region -Profile $Profile
+}
+if (-not $PSBoundParameters.ContainsKey("KnowledgeBaseGeneration")) {
+  $KnowledgeBaseGeneration = Resolve-PilarPrepKnowledgeBaseGeneration -StackName $StackName -Region $Region -Profile $Profile -DefaultGeneration $KnowledgeBaseGeneration
 }
 
 $backendOutputs = Invoke-Aws cloudformation describe-stacks `
@@ -167,6 +181,8 @@ Invoke-Aws cloudformation validate-template `
   --region $Region | Out-Null
 
 $parameterOverrides = @(
+  "MeetingEvidenceBucketName=$MeetingEvidenceBucketName",
+  "EvidenceVectorBucketName=$EvidenceVectorBucketName",
   "ResourcePrefix=$ResourcePrefix",
   "ProjectName=$ProjectName",
   "EnvironmentName=$EnvironmentName",
@@ -274,6 +290,7 @@ if (-not $SkipAgentCoreAuthorization) {
       -JobsStackName $StackName `
       -Region $Region `
       -Profile $Profile `
+      -PackagingBucket $PackagingBucket `
       -AllowedOrigin $AllowedOrigin `
       -SecondaryAllowedOrigin $SecondaryAllowedOrigin `
       -UnifiedWorkerRoleArn $workerRoleArn -KnowledgeBaseId $knowledgeBaseId -KnowledgeBaseArn $knowledgeBaseArn

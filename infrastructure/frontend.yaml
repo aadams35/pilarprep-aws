@@ -20,6 +20,10 @@ Metadata:
           - CloudFrontPriceClass
 
 Parameters:
+  CloudFrontName:
+    Type: String
+    Default: ""
+    Description: CloudFront console display name. Does not replace the distribution or public domain.
   WebACLId:
     Type: String
     Default: ""
@@ -78,6 +82,7 @@ Parameters:
 
 
 Conditions:
+  HasCloudFrontName: !Not [!Equals [!Ref CloudFrontName, ""]]
   HasWebAcl: !Not [!Equals [!Ref WebACLId, ""]]
   CreateManagedWebAcl: !Equals [!Ref WebACLId, ""]
   HasPriceClass: !Not [!Equals [!Ref CloudFrontPriceClass, ""]]
@@ -91,6 +96,8 @@ Conditions:
 Resources:
   FrontendBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Ref FrontendBucketName
       PublicAccessBlockConfiguration:
@@ -109,7 +116,7 @@ Resources:
               SSEAlgorithm: AES256
       Tags:
         - Key: Name
-          Value: !Sub "${ResourcePrefix}-web-assets"
+          Value: !Sub "pilarprep-${EnvironmentName}-web-assets"
         - Key: Project
           Value: !Ref ProjectName
         - Key: Application
@@ -269,7 +276,7 @@ Resources:
     Type: AWS::CloudFront::Distribution
     Properties:
       DistributionConfig:
-        Comment: !Sub "${ProjectName} ${EnvironmentName} static frontend"
+        Comment: !Sub "${ProjectName} web application and API (${EnvironmentName})"
         WebACLId: !If
           - HasWebAcl
           - !Ref WebACLId
@@ -354,7 +361,7 @@ Resources:
           - !Ref AWS::NoValue
       Tags:
         - Key: Name
-          Value: !Sub "${ResourcePrefix}-cloudfront-web"
+          Value: !If [HasCloudFrontName, !Ref CloudFrontName, !Sub "pilarprep-${EnvironmentName}-web"]
         - Key: Project
           Value: !Ref ProjectName
         - Key: Application
@@ -374,6 +381,8 @@ Resources:
 
   FrontendBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Bucket: !Ref FrontendBucket
       PolicyDocument:

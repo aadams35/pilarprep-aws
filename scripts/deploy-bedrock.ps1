@@ -1,6 +1,8 @@
 param(
   [string]$StackName = "pillarprep-bedrock",
   [string]$Region = "us-east-1",
+  [string]$ArtifactBucketName = "",
+  [string]$PackagingBucket = "",
   [Parameter(Mandatory = $true)]
   [ValidatePattern('^https://[^/\s]+$')]
   [string]$AllowedOrigin,
@@ -25,6 +27,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "resource-names.ps1")
 
 function Require-Command($Name) {
   if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -48,7 +51,7 @@ function New-TagSetJson($Name) {
       @{ Key = "Environment"; Value = $EnvironmentName },
       @{ Key = "Owner"; Value = $Owner },
       @{ Key = "CostCenter"; Value = $CostCenter },
-      @{ Key = "ManagedBy"; Value = "cloudformation" },
+      @{ Key = "ManagedBy"; Value = "deployment-scripts" },
       @{ Key = "Repository"; Value = "aadams35/pilarprep-aws" },
       @{ Key = "DataClassification"; Value = "demo" }
     )
@@ -73,7 +76,14 @@ if ([string]$identityArn -match ":root$") {
   throw "Refusing to deploy PilarPrep with AWS account root credentials. Configure or assume a least-privilege IAM deployment role, then retry."
 }
 
-$bucketName = "pillarprep-deploy-$accountId-$Region".ToLowerInvariant()
+if (-not $PackagingBucket) {
+  $PackagingBucket = Get-PilarPrepStorageName -Purpose "deployments" -AccountId $accountId -Region $Region -EnvironmentName $EnvironmentName
+}
+$bucketName = $PackagingBucket
+if (-not $PSBoundParameters.ContainsKey("ArtifactBucketName")) {
+  $defaultArtifactName = Get-PilarPrepStorageName -Purpose "artifacts" -AccountId $accountId -Region $Region -EnvironmentName $EnvironmentName
+  $ArtifactBucketName = Resolve-PilarPrepBucketParameter -StackName $StackName -ParameterName "ArtifactBucketName" -DefaultName $defaultArtifactName -Region $Region
+}
 Write-Host "Using AWS account $accountId in $Region"
 Write-Host "Packaging bucket: $bucketName"
 
@@ -98,7 +108,7 @@ if (-not $bucketExists) {
 }
 
 $packagingBucketTagsPath = Join-Path $workDir "packaging-bucket-tags.json"
-[System.IO.File]::WriteAllText($packagingBucketTagsPath, (New-TagSetJson "$ResourcePrefix-cfn-package"), [System.Text.UTF8Encoding]::new($false))
+[System.IO.File]::WriteAllText($packagingBucketTagsPath, (New-TagSetJson "pilarprep-$EnvironmentName-deployments"), [System.Text.UTF8Encoding]::new($false))
 Invoke-Aws s3api put-bucket-tagging `
   --bucket $bucketName `
   --tagging "file://$packagingBucketTagsPath" `
@@ -111,6 +121,7 @@ Invoke-Aws cloudformation package `
   --region $Region | Out-Null
 
 $parameterOverrides = @(
+  "ArtifactBucketName=$ArtifactBucketName",
   "ResourcePrefix=$ResourcePrefix",
   "ProjectName=$ProjectName",
   "EnvironmentName=$EnvironmentName",

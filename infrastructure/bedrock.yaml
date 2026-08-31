@@ -41,6 +41,11 @@ Metadata:
         default: Cost center tag
 
 Parameters:
+  ArtifactBucketName:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"
+    Description: Explicit artifact bucket name. Migrate existing data before changing this value.
   ResourcePrefix:
     Type: String
     Default: pillarprep-demo
@@ -114,6 +119,7 @@ Parameters:
 
 
 Conditions:
+  HasArtifactBucketName: !Not [!Equals [!Ref ArtifactBucketName, ""]]
   HasSecondaryAllowedOrigin: !Not [!Equals [!Ref SecondaryAllowedOrigin, ""]]
   HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, ""]]
   HasBudgetNotificationEmail: !Not [!Equals [!Ref BudgetNotificationEmail, ""]]
@@ -693,6 +699,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
+      BucketName: !If [HasArtifactBucketName, !Ref ArtifactBucketName, !Ref AWS::NoValue]
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -726,7 +733,7 @@ Resources:
               NoncurrentDays: 1
       Tags:
         - Key: Name
-          Value: !Sub "${ResourcePrefix}-brief-artifacts"
+          Value: !Sub "pilarprep-${EnvironmentName}-artifacts"
         - Key: Project
           Value: !Ref ProjectName
         - Key: Application
@@ -746,6 +753,8 @@ Resources:
 
   BriefArtifactsBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Bucket: !Ref BriefArtifactsBucket
       PolicyDocument:
