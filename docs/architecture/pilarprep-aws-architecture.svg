@@ -40,7 +40,7 @@
 <path id="workspace-sign-in" data-role="connector" data-from="app" data-to="cognito" d="M580 850 H682 V780 H740" fill="none" stroke="#77818b" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="5 7" marker-end="url(#arrow-dns)" marker-start="url(#start-dns)" />
 <path id="create-job" data-role="connector" data-from="api" data-to="jobs" d="M840 500 H1000" fill="none" stroke="#59636d" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-shared)" />
 <path id="enqueue" data-role="connector" data-from="jobs" data-to="queue" d="M1100 500 H1270" fill="none" stroke="#59636d" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-shared)" />
-<path id="job-state" data-role="connector" data-from="jobs" data-to="state" d="M1050 450 V136 H2620 V210" fill="none" stroke="#77818b" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="5 7" marker-end="url(#arrow-dns)" />
+<path id="job-state" data-role="connector" data-from="jobs" data-to="state" d="M1050 450 V160 H2620 V210" fill="none" stroke="#77818b" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="5 7" marker-end="url(#arrow-dns)" />
 <path id="consume" data-role="connector" data-from="queue" data-to="worker" d="M1370 500 H1510" fill="none" stroke="#59636d" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-shared)" />
 <path id="redrive" data-role="connector" data-from="queue" data-to="dead-letter-queue" d="M1320 450 V404" fill="none" stroke="#ab7980" stroke-width="2.7" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="5 7" marker-end="url(#arrow-failure)" />
 <path id="generate-refine" data-role="connector" data-from="worker" data-to="bedrock" d="M1610 475 H1810 V260 H1880" fill="none" stroke="#2367b6" stroke-width="2.7" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-briefs)" />
@@ -190,7 +190,7 @@
 <text x="644" y="825" text-anchor="middle" font-size="18" font-weight="500" fill="#77818b" data-role="edge-label">Sign in</text>
 <text x="920" y="474" text-anchor="middle" font-size="18" font-weight="500" fill="#59636d" data-role="edge-label">Create / poll job</text>
 <text x="1185" y="474" text-anchor="middle" font-size="18" font-weight="500" fill="#59636d" data-role="edge-label">Queue work</text>
-<text x="1700" y="119" text-anchor="middle" font-size="18" font-weight="500" fill="#77818b" data-role="edge-label">Create job record</text>
+<text x="1700" y="143" text-anchor="middle" font-size="18" font-weight="500" fill="#77818b" data-role="edge-label">Create job record</text>
 <text x="1440" y="474" text-anchor="middle" font-size="18" font-weight="500" fill="#59636d" data-role="edge-label">Process job</text>
 <text x="1340" y="430" text-anchor="start" font-size="18" font-weight="500" fill="#ab7980" data-role="edge-label">After retries</text>
 <text x="1798" y="239" text-anchor="middle" font-size="18" font-weight="500" fill="#2367b6" data-role="edge-label">Generate / refine</text>
