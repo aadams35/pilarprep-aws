@@ -7,8 +7,8 @@ Use the same labels as the [architecture diagram](pilarprep-aws-architecture.png
 | PilarPrep React app | [App](../../frontend/src/App.tsx), [browser clients](../../frontend/src/lib/) | [Frontend](../../infrastructure/frontend.yaml) |
 | Route 53 | DNS lookup only; no application handler | Live `pilarprep.app` public hosted zone with A/AAAA aliases to CloudFront; DNS is configured separately from the [frontend template](../../infrastructure/frontend.yaml), as described in [deployment](../../DEPLOYMENT.md) |
 | CloudFront and frontend S3 | [Browser entry](../../frontend/src/main.tsx), [build](../../vite.config.ts) | [Frontend](../../infrastructure/frontend.yaml) |
-| AWS Certificate Manager | HTTPS certificate; no application handler | Existing ACM certificate supplied through `AcmCertificateArn` in the [frontend template](../../infrastructure/frontend.yaml) |
-| AWS WAF | Edge protection; no separate application handler | [CloudFront Web ACL association and optional managed ACL](../../infrastructure/frontend.yaml) |
+| AWS Certificate Manager (collapsed into CloudFront annotation) | HTTPS certificate; no application handler | Existing ACM certificate supplied through `AcmCertificateArn` in the [frontend template](../../infrastructure/frontend.yaml) |
+| AWS WAF (collapsed into CloudFront annotation) | Edge protection; no separate application handler | [CloudFront Web ACL association and optional managed ACL](../../infrastructure/frontend.yaml) |
 | Cognito | [Workspace authentication](../../frontend/src/lib/cognito-auth.ts), [guest signing](../../frontend/src/lib/aws-sigv4.ts), [server scope](../../backend/pipeline/state.py) | [Jobs pipeline](../../infrastructure/jobs-pipeline.yaml), [core Bedrock stack](../../infrastructure/bedrock.yaml) |
 | API Gateway | [Jobs API routing](../../backend/jobs_api/handler.py) | [Jobs pipeline](../../infrastructure/jobs-pipeline.yaml) |
 | Jobs API Lambda | [jobs_api/handler.py](../../backend/jobs_api/handler.py) | `JobsApiFunction` in [jobs-pipeline.yaml](../../infrastructure/jobs-pipeline.yaml) |
@@ -33,6 +33,10 @@ Use the same labels as the [architecture diagram](pilarprep-aws-architecture.png
 | Secrets Manager and IAM (not expanded in the diagram) | [Application scope](../../backend/pipeline/state.py), [agent scope validation](../../backend/agentcore/common/security.py) | [API-origin secret and service roles](../../infrastructure/jobs-pipeline.yaml), [scope secret and agent roles](../../infrastructure/agentcore.yaml) |
 
 ## Follow One Request
+
+The blue dashed **Brief evidence retrieval** connection represents the AI Worker retrieving approved customer evidence before generating or refining a brief. The neutral dashed AgentCore connection serves handoff, catch-up, and meeting analysis. Both use the Knowledge Base, but the application chooses the retrieval path by action.
+
+WAF and ACM are separate AWS services associated with CloudFront, not built-in components. Their individual icons are omitted only to simplify this view; their configuration remains unchanged. See AWS documentation for [WAF association](https://docs.aws.amazon.com/waf/latest/developerguide/web-acl-associating-aws-resource.html) and [ACM certificates with CloudFront](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cnames-and-https-requirements.html).
 
 Start with `requestPipelineJob` in the React app. Follow `handler` in the Jobs API, then `handler` in the AI Worker. From there choose the Bedrock generator or AgentCore runtime. Shared job state is in `pipeline/state.py`; audio is in `pipeline/meeting.py`.
 
