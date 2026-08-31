@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import types
 import json
 import sys
@@ -708,6 +709,121 @@ class RuntimeTests(unittest.TestCase):
             },
         )
 
+    def test_handoff_context_preserves_facts_and_assessments_without_duplicate_history(self):
+        approved = json.loads(json.dumps(HANDOFF_PAYLOAD["approvedBrief"]))
+        approved["claims"] = [{
+            "section": "technical", "itemIndex": 0, "text": "duplicate" * 30_000,
+            "evidenceSnippet": "duplicate evidence" * 10_000,
+            "evidenceStatus": "needs-validation", "validationStatus": "unsupported-no-matching-source",
+            "sourceIds": [],
+        }]
+        approved["sourceCatalog"] = [{"sourceId": "source-1", "evidenceSnippet": "Payroll is on AWS."}]
+        approved["projectAnswer"] = "old handoff" * 30_000
+        approved["metadata"] = {"oldDiagnostics": "old" * 50_000}
+        latest = {
+            "brief": approved,
+            "requestContext": {
+                "context": "The customer is already on AWS and needs payroll integration.",
+                "decisionMakers": [{"name": "Ariana Cole", "roleType": "decision-maker"}],
+                "additionalDirection": "Keep payroll ownership explicit.",
+                "approvedBrief": approved,
+            },
+            "metadata": {"packetVersion": 4, "approvalStatus": "approved", "docxDownloadUrl": "private-url"},
+        }
+        before = json.dumps(latest, sort_keys=True)
+        request = {**HANDOFF_PAYLOAD, "action": "create_handoff"}
+        prompt = runtime_service._prompt(request, latest, {"version": 2}, None, ["Approved brief"], [])
+        parsed = json.loads(prompt)
+        context = parsed["latestApprovedBrief"]
+        for field in ("businessCase", "technical", "executive", "stakeholders", "gameplan", "objections"):
+            self.assertEqual(context["brief"][field], approved[field])
+        self.assertEqual(context["brief"]["claims"][0]["evidenceStatus"], "needs-validation")
+        self.assertEqual(context["brief"]["sourceCatalog"], approved["sourceCatalog"])
+        self.assertIn("already on AWS", prompt)
+        self.assertIn("Ariana Cole", prompt)
+        self.assertIn("payroll ownership", prompt)
+        self.assertNotIn("old handoff", prompt)
+        self.assertNotIn("private-url", prompt)
+        self.assertLess(len(prompt), 20_000)
+        self.assertEqual(json.dumps(latest, sort_keys=True), before)
+
+    def test_context_limit_rejects_instead_of_cutting_json_or_customer_facts(self):
+        for action in ("create_handoff", "generate_catchup"):
+            with self.subTest(action=action):
+                latest = {"brief": HANDOFF_PAYLOAD["approvedBrief"]}
+                request = {**HANDOFF_PAYLOAD, "action": action, "meetingNotes": "Required fact. " * 10_000}
+                with self.assertRaises(runtime_service.AgentContextLimitError):
+                    runtime_service._prompt(request, latest, {}, None, [], [])
+
+    def test_oversized_context_never_calls_the_model_or_writes_project_state(self):
+        class OversizedGateway(FakeGateway):
+            def call(self, name, arguments):
+                result = super().call(name, arguments)
+                if name == "get_latest_brief":
+                    result["requestContext"] = {"context": "Important customer facts. " * 10_000}
+                return result
+
+        with patch.object(runtime_service, "_default_reasoner") as model:
+            with self.assertRaises(runtime_service.AgentContextLimitError):
+                handle_request(
+                    HANDOFF_PAYLOAD, gateway_factory=OversizedGateway, reasoner=model,
+                    memory_factory=lambda _scope: nullcontext(None),
+                )
+        model.assert_not_called()
+        self.assertEqual([name for name, _arguments in OversizedGateway.calls], ["get_latest_brief", "get_project_state"])
+
+    def test_guardrail_size_error_is_terminal_for_every_handoff_model(self):
+        for model_id in runtime_service.MODEL_IDS.values():
+            with self.subTest(model_id=model_id):
+                fake_strands = types.ModuleType("strands")
+                fake_models = types.ModuleType("strands.models")
+                calls = []
+
+                class Agent:
+                    def __init__(self, **options):
+                        self.options = options
+
+                    def __call__(self, *_args, **_kwargs):
+                        calls.append(1)
+                        raise RuntimeError("ThrottlingException: Input text size (2095 text units) exceeds the maximum allowed (1000 text units) for the content filter policy")
+
+                fake_strands.Agent = Agent
+                fake_models.BedrockModel = lambda **_options: None
+                with (
+                    patch.dict(sys.modules, {"strands": fake_strands, "strands.models": fake_models}),
+                    patch.object(runtime_service, "_handoff_output_model", return_value=dict),
+                    patch.object(runtime_service, "_invoke_direct_json_reasoner") as recovery,
+                ):
+                    with self.assertRaises(runtime_service.AgentContextLimitError):
+                        runtime_service._default_reasoner('{"mode":"handoff"}', model_id, None)
+                self.assertEqual(len(calls), 1)
+                recovery.assert_not_called()
+
+    def test_capacity_throttling_is_not_mislabeled_as_an_input_size_failure(self):
+        self.assertFalse(runtime_service._is_input_size_error(RuntimeError("ThrottlingException: Too many requests")))
+        self.assertFalse(runtime_service._is_input_size_error(RuntimeError("ModelErrorException: Model processing failed")))
+
+    def test_runtime_entrypoint_returns_a_safe_terminal_context_error(self):
+        sdk = types.ModuleType("bedrock_agentcore")
+
+        class App:
+            def entrypoint(self, function):
+                return function
+
+        sdk.BedrockAgentCoreApp = App
+        spec = importlib.util.spec_from_file_location("handoff_entrypoint_test", ROOT / "runtime" / "main.py")
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"bedrock_agentcore": sdk}):
+            spec.loader.exec_module(module)
+        with patch.object(module, "handle_request", side_effect=runtime_service.AgentContextLimitError()):
+            result = module.invoke({}, None)
+        self.assertEqual(result["errorCode"], "AGENT_CONTEXT_TOO_LARGE")
+        self.assertFalse(result["retryable"])
+        self.assertEqual(result["error"], runtime_service.CONTEXT_LIMIT_MESSAGE)
+        with patch.object(module, "handle_request", side_effect=RuntimeError("temporary capacity error")):
+            with self.assertRaisesRegex(RuntimeError, "temporary capacity error"):
+                module.invoke({}, None)
+
     def test_structured_handoff_uses_guarded_content_and_output_model(self):
         expected = {
             "projectAnswer": MODEL_RESULT["projectAnswer"],
@@ -799,6 +915,8 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual(captured["model"]["guardrail_id"], "guardrail-test")
                 self.assertEqual(captured["model"]["guardrail_version"], "2")
                 self.assertEqual(captured["model"]["model_id"], model_id)
+                self.assertEqual(captured["model"]["boto_client_config"].retries["total_max_attempts"], 1)
+                self.assertIsNone(captured["agent"]["retry_strategy"])
                 self.assertIsNone(captured["agent"]["callback_handler"])
                 self.assertEqual(captured["agent"]["session_manager"], {"memory": "available"})
                 self.assertIn("directly through the StructuredOutput", captured["agent"]["system_prompt"])
@@ -994,7 +1112,10 @@ class RuntimeTests(unittest.TestCase):
             )
 
         self.assertEqual(result, expected)
-        client_mock.assert_called_once_with("bedrock-runtime", region_name="us-east-1")
+        client_mock.assert_called_once()
+        self.assertEqual(client_mock.call_args.args, ("bedrock-runtime",))
+        self.assertEqual(client_mock.call_args.kwargs["region_name"], "us-east-1")
+        self.assertEqual(client_mock.call_args.kwargs["config"].retries["total_max_attempts"], 1)
         self.assertEqual(captured["modelId"], "us.amazon.nova-pro-v1:0")
         self.assertEqual(captured["inferenceConfig"]["maxTokens"], 1200)
         self.assertEqual(captured["performanceConfig"], {"latency": "optimized"})

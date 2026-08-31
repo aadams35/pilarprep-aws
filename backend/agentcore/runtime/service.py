@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
 import boto3
+from botocore.config import Config
 
 from shared import content_safety
 
@@ -37,6 +38,81 @@ MODEL_IDS = {
         "BEDROCK_PREMIUM_MODEL_ID", "global.anthropic.claude-sonnet-4-6"
     ),
 }
+
+BRIEF_CONTEXT_FIELDS = (
+    "businessCase", "technical", "executive", "stakeholders", "gameplan",
+    "objections", "citations", "sourceCatalog",
+)
+REQUEST_CONTEXT_FIELDS = (
+    "company", "industry", "meetingType", "companySize", "context",
+    "companyValues", "companyValuesUrl", "companyValuesSourceNotes",
+    "additionalDirection", "decisionMakers", "stakeholders", "pillarRanking",
+    "pillars", "meetingNotes", "approvedEvidenceSources", "feedback",
+    "feedbackDetails", "feedbackNotes",
+)
+CONTEXT_LIMIT_MESSAGE = (
+    "This request contains too much context to process. Shorten the meeting notes "
+    "or customer inputs and try again. The approved brief has not changed."
+)
+
+
+class AgentContextLimitError(RuntimeError):
+    """A permanent input-size failure that must not be retried through SQS."""
+
+    def __init__(self):
+        super().__init__(CONTEXT_LIMIT_MESSAGE)
+
+
+def _bedrock_client_config() -> Config:
+    # SQS owns transient retries. Do not multiply them inside Botocore and Strands.
+    return Config(
+        connect_timeout=5,
+        read_timeout=180,
+        retries={"mode": "standard", "total_max_attempts": 1},
+        tcp_keepalive=True,
+    )
+
+
+def _is_input_size_error(error: BaseException) -> bool:
+    details = str(error).lower()
+    return (
+        "input text size" in details
+        and "exceeds" in details
+        and "maximum allowed" in details
+    )
+
+
+def _encode_context(evidence: Mapping[str, Any], maximum: int) -> str:
+    prompt = json.dumps(evidence, separators=(",", ":"), ensure_ascii=True)
+    if len(prompt) > maximum:
+        raise AgentContextLimitError()
+    return prompt
+
+
+def _approved_brief_context(latest: Mapping[str, Any]) -> dict[str, Any]:
+    brief = _source_response(latest)
+    context = {key: brief[key] for key in BRIEF_CONTEXT_FIELDS if key in brief}
+    # Claim text/snippets repeat the complete brief and source catalog. Preserve
+    # their support assessments and references, including unsupported assumptions.
+    context["claims"] = [
+        {key: claim[key] for key in (
+            "section", "itemIndex", "evidenceStatus", "validationStatus", "sourceIds",
+        ) if key in claim}
+        for claim in brief.get("claims", [])
+        if isinstance(claim, Mapping) and claim.get("section") in BRIEF_CONTEXT_FIELDS
+    ]
+    request = latest.get("requestContext")
+    metadata = latest.get("metadata")
+    return {
+        "brief": context,
+        "requestContext": {
+            key: request[key] for key in REQUEST_CONTEXT_FIELDS if key in request
+        } if isinstance(request, Mapping) else {},
+        "metadata": {
+            key: metadata[key] for key in ("packetVersion", "briefVersion", "approvalStatus")
+            if key in metadata
+        } if isinstance(metadata, Mapping) else {},
+    }
 
 
 def _is_claude_sonnet_46(model_id: str) -> bool:
@@ -374,6 +450,7 @@ def _invoke_direct_json_reasoner(
         response = boto3.client(
             "bedrock-runtime",
             region_name=os.getenv("AWS_REGION", "us-east-1"),
+            config=_bedrock_client_config(),
         ).converse(**request)
         content = response.get("output", {}).get("message", {}).get("content", [])
         text = "\n".join(
@@ -817,9 +894,15 @@ def _default_reasoner(
                 "guardrailVersion": guardrail_version,
                 "trace": "enabled",
             }
-        response = boto3.client(
-            "bedrock-runtime", region_name=os.getenv("AWS_REGION", "us-east-1")
-        ).converse(**request)
+        try:
+            response = boto3.client(
+                "bedrock-runtime", region_name=os.getenv("AWS_REGION", "us-east-1"),
+                config=_bedrock_client_config(),
+            ).converse(**request)
+        except Exception as error:
+            if _is_input_size_error(error):
+                raise AgentContextLimitError() from error
+            raise
         content = response.get("output", {}).get("message", {}).get("content", [])
         text = "\n".join(
             block.get("text", "")
@@ -837,6 +920,7 @@ def _default_reasoner(
         "temperature": 0.1,
         "max_tokens": 6000 if _is_claude_sonnet_46(model_id) else 5000,
         "streaming": False,
+        "boto_client_config": _bedrock_client_config(),
     }
     if not _is_claude_sonnet_46(model_id):
         model_options["top_p"] = 0.7
@@ -866,6 +950,7 @@ def _default_reasoner(
         system_prompt=system_prompt,
         session_manager=session_manager,
         callback_handler=None,
+        retry_strategy=None,
         agent_id="pilarprep-handoff-repair" if schema_repair_mode else None,
     )
     guarded_content = (
@@ -881,6 +966,8 @@ def _default_reasoner(
             output_model=output_model,
         )
     except Exception as error:
+        if _is_input_size_error(error):
+            raise AgentContextLimitError() from error
         if not _is_recoverable_strands_protocol_error(error):
             raise
         LOGGER.warning(
@@ -890,11 +977,16 @@ def _default_reasoner(
                 "modelId": model_id,
             },
         )
-        return _invoke_direct_json_reasoner(
-            prompt,
-            model_id,
-            prompt_payload if isinstance(prompt_payload, Mapping) else None,
-        )
+        try:
+            return _invoke_direct_json_reasoner(
+                prompt,
+                model_id,
+                prompt_payload if isinstance(prompt_payload, Mapping) else None,
+            )
+        except Exception as recovery_error:
+            if _is_input_size_error(recovery_error):
+                raise AgentContextLimitError() from recovery_error
+            raise
 
 
 def _source_response(latest: Mapping[str, Any]) -> dict[str, Any]:
@@ -1089,11 +1181,7 @@ def _prompt(
             ),
             "allowedSourceLabels": allowed_sources,
         }
-        return json.dumps(
-            evidence,
-            separators=(",", ":"),
-            ensure_ascii=True,
-        )[:60_000]
+        return _encode_context(evidence, 60_000)
 
     evidence = {
         "mode": "handoff",
@@ -1102,7 +1190,7 @@ def _prompt(
         "audienceRequirements": ROLE_REQUIREMENTS[request["audienceRole"]],
         "focus": request["focus"],
         "approvedMeetingOutcomes": request["meetingNotes"],
-        "latestApprovedBrief": latest,
+        "latestApprovedBrief": _approved_brief_context(latest),
         "currentProjectState": state,
         "approvedRetrievedEvidence": retrieved_evidence,
         "retrievalPolicy": (
@@ -1111,7 +1199,7 @@ def _prompt(
         ),
         "allowedSourceLabels": allowed_sources,
     }
-    return json.dumps(evidence, separators=(",", ":"), ensure_ascii=True)[:90_000]
+    return _encode_context(evidence, 90_000)
 
 def handle_request(
     payload: object,
@@ -1156,7 +1244,7 @@ def handle_request(
         tool_calls.append("get_project_state")
         allowed_sources = _approved_source_labels(latest, state)
 
-        brief_request = latest.get("request")
+        brief_request = latest.get("requestContext")
         brief_request = (
             brief_request if isinstance(brief_request, Mapping) else {}
         )
@@ -1207,6 +1295,14 @@ def handle_request(
                 allowed_sources,
                 retrieved_evidence,
             )
+            LOGGER.info(json.dumps({
+                "event": "agent_context_prepared",
+                "traceId": request["traceId"],
+                "modelId": model_id,
+                "action": request["action"],
+                "promptCharacters": len(model_prompt),
+                "memoryMode": "per-invocation",
+            }))
             generation_started = time.perf_counter()
             if request["action"] == "generate_catchup":
                 raw_generated = reasoner(

@@ -1274,6 +1274,11 @@ def _read_runtime_response(response: Mapping[str, Any]) -> dict[str, Any]:
     parsed = json.loads(raw)
     if not isinstance(parsed, dict):
         raise RuntimeError("AgentCore Runtime returned invalid JSON")
+    if parsed.get("errorCode") == "AGENT_CONTEXT_TOO_LARGE" and parsed.get("retryable") is False:
+        raise NonRetryableJobError(
+            "This request contains too much context to process. Shorten the meeting "
+            "notes or customer inputs and try again. The approved brief has not changed."
+        )
     return parsed
 
 

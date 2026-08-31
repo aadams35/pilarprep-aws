@@ -3023,6 +3023,20 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(shared_project["version"], 8)
         clients.assert_called_once_with("bedrock-agentcore")
 
+    def test_agent_context_limit_is_non_retryable_and_does_not_expose_runtime_details(self):
+        response = {"response": BytesIO(json.dumps({
+            "errorCode": "AGENT_CONTEXT_TOO_LARGE", "retryable": False,
+            "error": "Internal model details and private input must not be forwarded",
+        }).encode())}
+        with self.assertRaises(worker.NonRetryableJobError) as raised:
+            worker._read_runtime_response(response)
+        self.assertIn("approved brief has not changed", str(raised.exception))
+        self.assertNotIn("Internal model details", str(raised.exception))
+
+    def test_successful_agent_response_is_not_changed_by_terminal_error_handling(self):
+        expected = {"provider": "agentcore", "projectAnswer": "Grounded handoff", "metadata": {"fallbackUsed": False}}
+        self.assertEqual(worker._read_runtime_response({"response": BytesIO(json.dumps(expected).encode())}), expected)
+
     def test_catchup_rejects_write_capable_tool_trace(self):
         class FakeAgentCore:
             def invoke_agent_runtime(self, **_kwargs):

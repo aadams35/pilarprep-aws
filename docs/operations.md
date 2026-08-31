@@ -43,6 +43,10 @@ Handoff generation uses non-streaming Bedrock calls through Strands, requests th
 
 `handoff_model_completed` records duration, accumulated model calls, and token usage without prompt or response text. The packet's `metadata.agentTimingsMs` separates context preparation from generation and validation. These phase timings are not pure Bedrock inference time. A structured-output recovery warning indicates additional model work; a low queue wait does not rule that out.
 
+An August 31 failure restored 95 AgentCore Memory events containing 2.9 million characters of repeated packet context. Bedrock returned a Guardrails input-size error as `ThrottlingException`; nested SDK retries stretched a failed attempt to 196 seconds. Batch handoffs now use fresh, project-scoped Memory sessions for each invocation, including queue retries. The approved brief and DynamoDB project state provide continuity; old conversations remain stored but are not replayed into new handoffs.
+
+Handoff prompts retain all six brief sections, customer inputs, evidence sources, and claim support assessments while omitting duplicated claim text, previous handoff outputs, and download/diagnostic metadata. Context is encoded as complete JSON and rejected when over the size budget, never cut mid-document. `agent_context_prepared` records prompt character count without customer text. Botocore and Strands do not add transient retries inside the handoff; SQS owns those retries. Permanent size errors return `AGENT_CONTEXT_TOO_LARGE` and terminate the job without requeueing or modifying approved content. Guardrails, source validation, and scoped persistence remain enforced for Nova Pro, Nova Micro, and Claude Sonnet.
+
 ## Brief and Handoff State
 
 Pre-call context starts empty. A completed handoff is displayed only when its customer, client, project, approved packet version, audience, and focus match the selected view. Navigating back to a matching saved handoff reuses it without submitting another job. Changing the customer cancels the browser request and prevents late results from replacing the new workspace.

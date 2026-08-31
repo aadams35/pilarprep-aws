@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from contextlib import nullcontext
 from typing import Any, Mapping
+from uuid import uuid4
 
 from common.identifiers import stable_identifier
 
@@ -26,7 +27,9 @@ def memory_session(scope: Mapping[str, str]):
     )
     session_id = stable_identifier(
         "project-session",
-        [scope["tenantId"], scope["clientId"], scope["projectId"], scope["sessionId"]],
+        # Batch jobs reload authoritative project state, not previous model conversations.
+        # Retain a scoped audit trail without replaying failed attempts or old packets.
+        [scope["tenantId"], scope["clientId"], scope["projectId"], scope["sessionId"], uuid4().hex],
         length=40,
     )
     config = AgentCoreMemoryConfig(
