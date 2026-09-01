@@ -1505,6 +1505,22 @@ class MeetingAgenticRagTests(unittest.TestCase):
             )
         self.assertEqual(len(tools.tool_calls), 3)
 
+    def test_meeting_action_fields_are_normalized_before_validation(self):
+        analysis = meeting_runtime._normalize_meeting_analysis(
+            {
+                "actions": [
+                    {
+                        "owner": {"team": "Solutions Architecture"},
+                        "targetDate": ["Week 2"],
+                        "dependency": {"system": "Payroll", "owner": "HR"},
+                    }
+                ]
+            }
+        )
+        action = analysis["actions"][0]
+        self.assertEqual(action["owner"], "team: Solutions Architecture")
+        self.assertEqual(action["targetDate"], "Week 2")
+        self.assertEqual(action["dependency"], "system: Payroll; owner: HR")
     def test_cross_client_request_is_rejected_before_tools_run(self):
         request = self.meeting_request()
         request["scope"]["clientId"] = "another-client"

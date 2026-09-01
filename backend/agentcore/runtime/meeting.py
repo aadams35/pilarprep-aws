@@ -118,9 +118,13 @@ def _meeting_output_model() -> type[Any]:
         sourceType: str
 
     class MeetingAction(MeetingAnalysisItem):
-        owner: str
-        targetDate: str
-        dependency: str
+        # Models sometimes return a small object for these descriptive fields.
+        # Accept it at the structured-output boundary and normalize it before
+        # the result reaches the pipeline validator instead of triggering a
+        # repeated tool-use repair loop.
+        owner: Any
+        targetDate: Any
+        dependency: Any
 
     class CorrectedAssumption(MeetingAnalysisItem):
         previousAssumption: str
@@ -143,6 +147,47 @@ def _meeting_output_model() -> type[Any]:
 
     _MEETING_OUTPUT_MODEL = MeetingAnalysisOutput
     return MeetingAnalysisOutput
+
+
+def _normalize_action_text(value: object, fallback: str) -> str:
+    if isinstance(value, str):
+        return value.strip() or fallback
+    if isinstance(value, Mapping):
+        rendered = "; ".join(
+            f"{key}: {item}" for key, item in value.items() if item is not None
+        )
+        return rendered.strip() or fallback
+    if isinstance(value, list):
+        rendered = "; ".join(str(item) for item in value if item is not None)
+        return rendered.strip() or fallback
+    if value is None:
+        return fallback
+    return str(value).strip() or fallback
+
+
+def _normalize_meeting_analysis(value: Mapping[str, Any]) -> dict[str, Any]:
+    output = dict(value)
+    actions = output.get("actions")
+    if not isinstance(actions, list):
+        return output
+    normalized_actions: list[object] = []
+    for action in actions:
+        if not isinstance(action, Mapping):
+            normalized_actions.append(action)
+            continue
+        normalized = dict(action)
+        normalized["owner"] = _normalize_action_text(
+            normalized.get("owner"), "Unassigned"
+        )
+        normalized["targetDate"] = _normalize_action_text(
+            normalized.get("targetDate"), "Not set"
+        )
+        normalized["dependency"] = _normalize_action_text(
+            normalized.get("dependency"), "None stated"
+        )
+        normalized_actions.append(normalized)
+    output["actions"] = normalized_actions
+    return output
 
 
 class ToolLimitError(RuntimeError):
@@ -604,7 +649,7 @@ def analyze_meeting(
             "meetingTranscript", {}
         )
         reasoning_input["repairReason"] = screened_untrusted.get("repairReason", "")
-        analysis = _reason(reasoning_input, None)
+        analysis = _normalize_meeting_analysis(_reason(reasoning_input, None))
     LOGGER.info(
         json.dumps(
             {
