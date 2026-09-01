@@ -1560,7 +1560,7 @@ def _run_meeting_analysis(
     )
 
     error: Exception | None = None
-    for attempt in range(2):
+    for attempt in range(1):
         raw = _invoke_meeting_runtime(
             scope,
             document,

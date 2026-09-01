@@ -129,17 +129,19 @@ def _meeting_output_model() -> type[Any]:
 
     class MeetingAnalysisOutput(BaseModel):
         meetingSummary: str = Field(min_length=1)
-        confirmedFacts: list[MeetingAnalysisItem]
-        correctedAssumptions: list[CorrectedAssumption] = Field(min_length=1)
-        decisions: list[MeetingAnalysisItem]
-        openQuestions: list[MeetingAnalysisItem]
-        requirements: list[MeetingAnalysisItem]
-        risks: list[MeetingAnalysisItem]
-        scopeChanges: list[MeetingAnalysisItem]
-        actions: list[MeetingAction] = Field(min_length=2)
-        stakeholderSignals: list[MeetingAnalysisItem]
+        confirmedFacts: list[MeetingAnalysisItem] = Field(max_length=3)
+        correctedAssumptions: list[CorrectedAssumption] = Field(
+            min_length=1, max_length=2
+        )
+        decisions: list[MeetingAnalysisItem] = Field(max_length=2)
+        openQuestions: list[MeetingAnalysisItem] = Field(max_length=3)
+        requirements: list[MeetingAnalysisItem] = Field(max_length=3)
+        risks: list[MeetingAnalysisItem] = Field(max_length=3)
+        scopeChanges: list[MeetingAnalysisItem] = Field(max_length=2)
+        actions: list[MeetingAction] = Field(min_length=2, max_length=3)
+        stakeholderSignals: list[MeetingAnalysisItem] = Field(max_length=3)
         proposedHandoffSummary: str = Field(min_length=1)
-        citations: list[str] = Field(min_length=1)
+        citations: list[str] = Field(min_length=1, max_length=12)
 
     _MEETING_OUTPUT_MODEL = MeetingAnalysisOutput
     return MeetingAnalysisOutput
@@ -452,28 +454,35 @@ def _meeting_prompt_content(
         context,
         separators=(",", ":"),
         ensure_ascii=True,
-    )[:80_000]
+    )[:30_000]
     transcript_text = json.dumps(
         {"meetingTranscript": transcript},
         separators=(",", ":"),
         ensure_ascii=True,
     )[:15_000]
     content: list[dict[str, Any]] = [
-        {"text": instruction + context_text}
+        {
+            "text": (
+                instruction
+                + "Keep the response concise: no more than three items in any "
+                "array, one sentence per statement and evidenceText, and no "
+                "repeated facts.\n"
+                + context_text
+            )
+        },
+        {"text": transcript_text},
     ]
     if guardrail_enabled:
         content.append(
             {
                 "guardContent": {
                     "text": {
-                        "text": transcript_text,
+                        "text": transcript_text[:3_000],
                         "qualifiers": ["guard_content"],
                     }
                 }
             }
         )
-    else:
-        content.append({"text": transcript_text})
     return content
 
 
@@ -481,52 +490,89 @@ def _reason(
     evidence: Mapping[str, Any],
     session_manager: Any,
 ) -> dict[str, Any]:
-    from strands import Agent
-    from strands.models import BedrockModel
-
-    options: dict[str, Any] = {
-        "model_id": MODEL_ID,
-        "region_name": os.getenv("AWS_REGION", "us-east-1"),
-        "temperature": 0.0,
-        "top_p": 0.7,
-        "max_tokens": 5000,
-    }
+    del session_manager
     guardrail_id = os.getenv("BEDROCK_GUARDRAIL_ID", "")
     guardrail_version = os.getenv("BEDROCK_GUARDRAIL_VERSION", "")
-    if guardrail_id and guardrail_version:
-        options.update(
+    guardrail_enabled = bool(guardrail_id and guardrail_version)
+    request: dict[str, Any] = {
+        "modelId": MODEL_ID,
+        "system": [{"text": MEETING_SYSTEM_PROMPT}],
+        "messages": [
             {
-                "guardrail_id": guardrail_id,
-                "guardrail_version": guardrail_version,
-                "guardrail_trace": "enabled",
+                "role": "user",
+                "content": _meeting_prompt_content(
+                    evidence,
+                    guardrail_enabled=guardrail_enabled,
+                    instruction=(
+                        "Submit one complete meeting analysis using the "
+                        "submit_meeting_analysis tool. Do not call any other "
+                        "tool and do not return commentary.\n"
+                    ),
+                ),
+            }
+        ],
+        "inferenceConfig": {
+            "temperature": 0.0,
+            "topP": 0.7,
+            "maxTokens": 4200,
+        },
+        "toolConfig": {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "name": "submit_meeting_analysis",
+                        "description": (
+                            "Return the complete transcript-grounded PilarPrep "
+                            "meeting analysis."
+                        ),
+                        "inputSchema": {
+                            "json": _meeting_output_model().model_json_schema()
+                        },
+                    }
+                }
+            ],
+            "toolChoice": {
+                "tool": {"name": "submit_meeting_analysis"}
+            },
+        },
+    }
+    if guardrail_enabled:
+        request["guardrailConfig"] = {
+            "guardrailIdentifier": guardrail_id,
+            "guardrailVersion": guardrail_version,
+            "trace": "enabled_full",
+        }
+    response = boto3.client(
+        "bedrock-runtime",
+        region_name=os.getenv("AWS_REGION", "us-east-1"),
+    ).converse(**request)
+    content = response.get("output", {}).get("message", {}).get("content", [])
+    for block in content:
+        if not isinstance(block, Mapping):
+            continue
+        tool_use = block.get("toolUse")
+        if (
+            isinstance(tool_use, Mapping)
+            and tool_use.get("name") == "submit_meeting_analysis"
+            and isinstance(tool_use.get("input"), Mapping)
+        ):
+            return dict(tool_use["input"])
+    rendered = "\n".join(
+        str(block.get("text") or "")
+        for block in content
+        if isinstance(block, Mapping) and block.get("text")
+    ).strip()
+    LOGGER.warning(
+        json.dumps(
+            {
+                "event": "meeting_structured_output_missing",
+                "modelId": MODEL_ID,
+                "stopReason": response.get("stopReason"),
+                "outputCharacters": len(rendered),
             }
         )
-
-    def invoke(instruction: str = "") -> dict[str, Any]:
-        agent = Agent(
-            model=BedrockModel(**options),
-            system_prompt=MEETING_SYSTEM_PROMPT,
-        )
-        return _json_from_model(
-            agent(
-                _meeting_prompt_content(
-                    evidence,
-                    guardrail_enabled=bool(
-                        guardrail_id and guardrail_version
-                    ),
-                    instruction=instruction,
-                ),
-                structured_output_model=_meeting_output_model(),
-            )
-        )
-
-    try:
-        return invoke()
-    except ValueError:
-        return invoke(
-            "Regenerate the complete analysis as one valid JSON object. "
-            "Use every required field and no Markdown.\n"
-        )
+    )
+    return _json_from_model(rendered)
 
 
 def analyze_meeting(

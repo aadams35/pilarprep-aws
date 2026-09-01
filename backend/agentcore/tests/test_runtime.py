@@ -1233,7 +1233,7 @@ class RuntimeTests(unittest.TestCase):
 
 
 class MeetingAgenticRagTests(unittest.TestCase):
-    def test_meeting_reasoner_uses_the_complete_structured_output_model(self):
+    def test_meeting_reasoner_uses_one_bounded_converse_request(self):
         tree = ast.parse((ROOT / "runtime" / "meeting.py").read_text())
         factory = next(
             node
@@ -1262,19 +1262,6 @@ class MeetingAgenticRagTests(unittest.TestCase):
             "at least two distinct transcript-grounded actions",
             meeting_runtime.MEETING_SYSTEM_PROMPT,
         )
-        reasoner = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name == "_reason"
-        )
-        structured_calls = [
-            keyword
-            for node in ast.walk(reasoner)
-            if isinstance(node, ast.Call)
-            for keyword in node.keywords
-            if keyword.arg == "structured_output_model"
-        ]
-        self.assertEqual(len(structured_calls), 1)
 
         content = meeting_runtime._meeting_prompt_content(
             {
@@ -1285,67 +1272,81 @@ class MeetingAgenticRagTests(unittest.TestCase):
             },
             guardrail_enabled=True,
         )
-        self.assertEqual(
-            content[0],
-            {"text": "{\"task\":\"Compare the meeting.\"}"},
-        )
+        self.assertIn('"task":"Compare the meeting."', content[0]["text"])
         self.assertNotIn("meetingTranscript", content[0]["text"])
-        guarded = content[1]["guardContent"]["text"]
+        self.assertIn("already operates on AWS", content[1]["text"])
+        guarded = content[2]["guardContent"]["text"]
         self.assertIn("already operates on AWS", guarded["text"])
         self.assertEqual(guarded["qualifiers"], ["guard_content"])
 
-        unguarded = meeting_runtime._meeting_prompt_content(
-            {"meetingTranscript": {"text": "Synthetic transcript."}},
-            guardrail_enabled=False,
-            instruction="Repair. ",
-        )
-        self.assertEqual(unguarded[0]["text"], "Repair. {}")
+        expected = {"meetingSummary": "Payroll meeting analyzed."}
+        captured = {}
+
+        class OutputModel:
+            @classmethod
+            def model_json_schema(cls):
+                return {"type": "object"}
+
+        class Runtime:
+            def converse(self, **kwargs):
+                captured.update(kwargs)
+                return {
+                    "stopReason": "tool_use",
+                    "output": {
+                        "message": {
+                            "content": [
+                                {
+                                    "toolUse": {
+                                        "name": "submit_meeting_analysis",
+                                        "input": expected,
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                }
+
+        with (
+            patch.object(
+                meeting_runtime,
+                "_meeting_output_model",
+                return_value=OutputModel,
+            ),
+            patch.object(
+                meeting_runtime.boto3,
+                "client",
+                return_value=Runtime(),
+            ),
+            patch.dict(
+                meeting_runtime.os.environ,
+                {
+                    "BEDROCK_GUARDRAIL_ID": "guardrail-test",
+                    "BEDROCK_GUARDRAIL_VERSION": "2",
+                },
+                clear=False,
+            ),
+        ):
+            result = meeting_runtime._reason(
+                {
+                    "task": "Compare the meeting.",
+                    "meetingTranscript": {
+                        "text": "Blue Mesa already operates on AWS."
+                    },
+                },
+                None,
+            )
+
+        self.assertEqual(result, expected)
+        self.assertEqual(captured["modelId"], meeting_runtime.MODEL_ID)
+        self.assertEqual(captured["inferenceConfig"]["maxTokens"], 4200)
         self.assertEqual(
-            unguarded[1],
-            {
-                "text": (
-                    "{\"meetingTranscript\":{\"text\":\"Synthetic transcript.\"}}"
-                )
-            },
+            captured["toolConfig"]["toolChoice"]["tool"]["name"],
+            "submit_meeting_analysis",
         )
-
-        repair_content = meeting_runtime._meeting_prompt_content(
-            {
-                "task": "Compare the meeting.",
-                "repairReason": (
-                    "Meeting analysis contradicted the confirmed "
-                    "existing-on-AWS state in meetingSummary"
-                ),
-                "meetingTranscript": {"text": "Synthetic transcript."},
-            },
-            guardrail_enabled=False,
+        self.assertEqual(
+            captured["guardrailConfig"]["guardrailIdentifier"],
+            "guardrail-test",
         )
-        self.assertIn("VALIDATION REPAIR REQUIRED", repair_content[0]["text"])
-        self.assertIn("already operates on AWS", repair_content[0]["text"])
-        self.assertIn("meetingSummary", repair_content[0]["text"])
-        self.assertNotIn("repairReason", repair_content[0]["text"])
-
-        invoke_calls = [
-            node
-            for node in ast.walk(reasoner)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "invoke"
-        ]
-        self.assertEqual(len(invoke_calls), 2)
-        agent_calls = [
-            node
-            for node in ast.walk(reasoner)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "Agent"
-        ]
-        self.assertEqual(len(agent_calls), 1)
-        self.assertNotIn(
-            "session_manager",
-            {keyword.arg for keyword in agent_calls[0].keywords},
-        )
-
     def test_meeting_parser_reads_structured_tool_payload(self):
         expected = {"meetingSummary": "Payroll meeting analyzed."}
 
