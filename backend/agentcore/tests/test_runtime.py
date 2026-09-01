@@ -1277,14 +1277,15 @@ class MeetingAgenticRagTests(unittest.TestCase):
             for node in tree.body
             if isinstance(node, ast.FunctionDef) and node.name == "_reason"
         )
-        structured_calls = [
-            keyword
+        converse_calls = [
+            node
             for node in ast.walk(reasoner)
             if isinstance(node, ast.Call)
-            for keyword in node.keywords
-            if keyword.arg == "structured_output_model"
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "converse"
         ]
-        self.assertEqual(len(structured_calls), 1)
+        self.assertEqual(len(converse_calls), 1)
+        self.assertIn("guardrailConfig", ast.unparse(reasoner))
 
         content = meeting_runtime._meeting_prompt_content(
             {
@@ -1300,7 +1301,8 @@ class MeetingAgenticRagTests(unittest.TestCase):
             {"text": "{\"task\":\"Compare the meeting.\"}"},
         )
         self.assertNotIn("meetingTranscript", content[0]["text"])
-        guarded = content[1]["guardContent"]["text"]
+        self.assertIn("already operates on AWS", content[1]["text"])
+        guarded = content[2]["guardContent"]["text"]
         self.assertIn("already operates on AWS", guarded["text"])
         self.assertEqual(guarded["qualifiers"], ["guard_content"])
 
@@ -1335,26 +1337,9 @@ class MeetingAgenticRagTests(unittest.TestCase):
         self.assertIn("meetingSummary", repair_content[0]["text"])
         self.assertNotIn("repairReason", repair_content[0]["text"])
 
-        invoke_calls = [
-            node
-            for node in ast.walk(reasoner)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "invoke"
-        ]
-        self.assertEqual(len(invoke_calls), 2)
-        agent_calls = [
-            node
-            for node in ast.walk(reasoner)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "Agent"
-        ]
-        self.assertEqual(len(agent_calls), 1)
-        self.assertNotIn(
-            "session_manager",
-            {keyword.arg for keyword in agent_calls[0].keywords},
-        )
+        reasoner_source = ast.unparse(reasoner)
+        self.assertNotIn("Agent(", reasoner_source)
+        self.assertIn("MEETING_MODEL_ID", reasoner_source)
 
     def test_meeting_parser_reads_structured_tool_payload(self):
         expected = {"meetingSummary": "Payroll meeting analyzed."}
