@@ -691,33 +691,23 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(captured["agent_id"], "pilarprep-handoff-repair")
 
     def test_guarded_user_content_excludes_approved_evidence(self):
-        guarded = runtime_service._guarded_user_content(
-            {
-                "focus": "Prepare the evidence plan.",
-                "approvedMeetingOutcomes": "Customer-approved notes.",
-                "latestApprovedBrief": {"technical": ["Trusted brief"]},
-                "currentProjectState": {"risks": ["Trusted state"]},
-            }
+        guarded = json.loads(
+            runtime_service._guarded_user_content(
+                {
+                    "focus": "Prepare the evidence plan.",
+                    "approvedMeetingOutcomes": "Customer-approved notes.",
+                    "latestApprovedBrief": {"technical": ["Trusted brief"]},
+                    "currentProjectState": {"risks": ["Trusted state"]},
+                }
+            )
         )
         self.assertEqual(
             guarded,
-            "User focus:\nPrepare the evidence plan.\n\n"
-            "Approved meeting outcomes:\nCustomer-approved notes.",
-        )
-        self.assertNotIn("Trusted brief", guarded)
-        self.assertNotIn("Trusted state", guarded)
-
-    def test_model_guardrail_content_is_bounded_after_full_input_screening(self):
-        guarded = runtime_service._guarded_user_content(
             {
-                "focus": "focus-start " + ("F" * 5_000),
-                "approvedMeetingOutcomes": ("O" * 5_000) + " outcomes-end",
-            }
+                "focus": "Prepare the evidence plan.",
+                "approvedMeetingOutcomes": "Customer-approved notes.",
+            },
         )
-        self.assertEqual(len(guarded), runtime_service.MODEL_GUARDRAIL_INPUT_CHARS)
-        self.assertTrue(guarded.startswith("User focus:\nfocus-start"))
-        self.assertTrue(guarded.endswith("outcomes-end"))
-        self.assertIn("screened in full before model invocation", guarded)
 
     def test_handoff_context_preserves_facts_and_assessments_without_duplicate_history(self):
         approved = json.loads(json.dumps(HANDOFF_PAYLOAD["approvedBrief"]))
@@ -1277,15 +1267,14 @@ class MeetingAgenticRagTests(unittest.TestCase):
             for node in tree.body
             if isinstance(node, ast.FunctionDef) and node.name == "_reason"
         )
-        converse_calls = [
-            node
+        structured_calls = [
+            keyword
             for node in ast.walk(reasoner)
             if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "converse"
+            for keyword in node.keywords
+            if keyword.arg == "structured_output_model"
         ]
-        self.assertEqual(len(converse_calls), 1)
-        self.assertIn("guardrailConfig", ast.unparse(reasoner))
+        self.assertEqual(len(structured_calls), 1)
 
         content = meeting_runtime._meeting_prompt_content(
             {
@@ -1301,8 +1290,7 @@ class MeetingAgenticRagTests(unittest.TestCase):
             {"text": "{\"task\":\"Compare the meeting.\"}"},
         )
         self.assertNotIn("meetingTranscript", content[0]["text"])
-        self.assertIn("already operates on AWS", content[1]["text"])
-        guarded = content[2]["guardContent"]["text"]
+        guarded = content[1]["guardContent"]["text"]
         self.assertIn("already operates on AWS", guarded["text"])
         self.assertEqual(guarded["qualifiers"], ["guard_content"])
 
@@ -1337,9 +1325,26 @@ class MeetingAgenticRagTests(unittest.TestCase):
         self.assertIn("meetingSummary", repair_content[0]["text"])
         self.assertNotIn("repairReason", repair_content[0]["text"])
 
-        reasoner_source = ast.unparse(reasoner)
-        self.assertNotIn("Agent(", reasoner_source)
-        self.assertIn("MEETING_MODEL_ID", reasoner_source)
+        invoke_calls = [
+            node
+            for node in ast.walk(reasoner)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "invoke"
+        ]
+        self.assertEqual(len(invoke_calls), 2)
+        agent_calls = [
+            node
+            for node in ast.walk(reasoner)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "Agent"
+        ]
+        self.assertEqual(len(agent_calls), 1)
+        self.assertNotIn(
+            "session_manager",
+            {keyword.arg for keyword in agent_calls[0].keywords},
+        )
 
     def test_meeting_parser_reads_structured_tool_payload(self):
         expected = {"meetingSummary": "Payroll meeting analyzed."}
@@ -1490,22 +1495,6 @@ class MeetingAgenticRagTests(unittest.TestCase):
             )
         self.assertEqual(len(tools.tool_calls), 3)
 
-    def test_meeting_action_fields_are_normalized_before_validation(self):
-        analysis = meeting_runtime._normalize_meeting_analysis(
-            {
-                "actions": [
-                    {
-                        "owner": {"team": "Solutions Architecture"},
-                        "targetDate": ["Week 2"],
-                        "dependency": {"system": "Payroll", "owner": "HR"},
-                    }
-                ]
-            }
-        )
-        action = analysis["actions"][0]
-        self.assertEqual(action["owner"], "team: Solutions Architecture")
-        self.assertEqual(action["targetDate"], "Week 2")
-        self.assertEqual(action["dependency"], "system: Payroll; owner: HR")
     def test_cross_client_request_is_rejected_before_tools_run(self):
         request = self.meeting_request()
         request["scope"]["clientId"] = "another-client"

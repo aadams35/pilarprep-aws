@@ -54,11 +54,6 @@ CONTEXT_LIMIT_MESSAGE = (
     "This request contains too much context to process. Shorten the meeting notes "
     "or customer inputs and try again. The approved brief has not changed."
 )
-# Full input is screened separately; keep this duplicate model guard block bounded.
-MODEL_GUARDRAIL_INPUT_CHARS = 3_000
-MODEL_GUARDRAIL_TRUNCATION_MARKER = (
-    "\n\n[Additional user content was screened in full before model invocation.]\n\n"
-)
 
 
 class AgentContextLimitError(RuntimeError):
@@ -284,28 +279,12 @@ def _handoff_output_model() -> type[Any]:
 def _guarded_user_content(prompt_payload: object) -> str:
     if not isinstance(prompt_payload, Mapping):
         return ""
-    guarded_parts = []
-    for key, label in (
-        ("focus", "User focus"),
-        ("approvedMeetingOutcomes", "Approved meeting outcomes"),
-    ):
-        value = prompt_payload.get(key)
-        if isinstance(value, str) and value.strip():
-            guarded_parts.append(f"{label}:\n{value.strip()}")
-    guarded = "\n\n".join(guarded_parts)
-    if len(guarded) <= MODEL_GUARDRAIL_INPUT_CHARS:
-        return guarded
-    available = (
-        MODEL_GUARDRAIL_INPUT_CHARS
-        - len(MODEL_GUARDRAIL_TRUNCATION_MARKER)
-    )
-    head = available // 2
-    tail = available - head
-    return (
-        guarded[:head]
-        + MODEL_GUARDRAIL_TRUNCATION_MARKER
-        + guarded[-tail:]
-    )
+    guarded = {
+        key: prompt_payload.get(key)
+        for key in ("focus", "approvedMeetingOutcomes")
+        if prompt_payload.get(key)
+    }
+    return json.dumps(guarded, separators=(",", ":"), ensure_ascii=True)
 
 
 def _agent_prompt_content(prompt: str, guarded_content: str) -> object:

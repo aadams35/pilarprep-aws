@@ -20,7 +20,6 @@ MAX_TOOL_CALLS = 3
 MAX_RETRIEVAL_ROUNDS = 2
 KNOWLEDGE_BASE_ID = os.getenv("KNOWLEDGE_BASE_ID", "")
 MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "us.amazon.nova-pro-v1:0")
-MEETING_MODEL_ID = os.getenv("BEDROCK_PREMIUM_MODEL_ID", MODEL_ID)
 
 MEETING_SYSTEM_PROMPT = """You are PilarPrep's evidence-first meeting analyst.
 You compare one synthetic Blue Mesa Payments meeting with the latest approved
@@ -119,13 +118,9 @@ def _meeting_output_model() -> type[Any]:
         sourceType: str
 
     class MeetingAction(MeetingAnalysisItem):
-        # Models sometimes return a small object for these descriptive fields.
-        # Accept it at the structured-output boundary and normalize it before
-        # the result reaches the pipeline validator instead of triggering a
-        # repeated tool-use repair loop.
-        owner: Any
-        targetDate: Any
-        dependency: Any
+        owner: str
+        targetDate: str
+        dependency: str
 
     class CorrectedAssumption(MeetingAnalysisItem):
         previousAssumption: str
@@ -148,47 +143,6 @@ def _meeting_output_model() -> type[Any]:
 
     _MEETING_OUTPUT_MODEL = MeetingAnalysisOutput
     return MeetingAnalysisOutput
-
-
-def _normalize_action_text(value: object, fallback: str) -> str:
-    if isinstance(value, str):
-        return value.strip() or fallback
-    if isinstance(value, Mapping):
-        rendered = "; ".join(
-            f"{key}: {item}" for key, item in value.items() if item is not None
-        )
-        return rendered.strip() or fallback
-    if isinstance(value, list):
-        rendered = "; ".join(str(item) for item in value if item is not None)
-        return rendered.strip() or fallback
-    if value is None:
-        return fallback
-    return str(value).strip() or fallback
-
-
-def _normalize_meeting_analysis(value: Mapping[str, Any]) -> dict[str, Any]:
-    output = dict(value)
-    actions = output.get("actions")
-    if not isinstance(actions, list):
-        return output
-    normalized_actions: list[object] = []
-    for action in actions:
-        if not isinstance(action, Mapping):
-            normalized_actions.append(action)
-            continue
-        normalized = dict(action)
-        normalized["owner"] = _normalize_action_text(
-            normalized.get("owner"), "Unassigned"
-        )
-        normalized["targetDate"] = _normalize_action_text(
-            normalized.get("targetDate"), "Not set"
-        )
-        normalized["dependency"] = _normalize_action_text(
-            normalized.get("dependency"), "None stated"
-        )
-        normalized_actions.append(normalized)
-    output["actions"] = normalized_actions
-    return output
 
 
 class ToolLimitError(RuntimeError):
@@ -505,20 +459,21 @@ def _meeting_prompt_content(
         ensure_ascii=True,
     )[:15_000]
     content: list[dict[str, Any]] = [
-        {"text": instruction + context_text},
-        {"text": transcript_text},
+        {"text": instruction + context_text}
     ]
     if guardrail_enabled:
         content.append(
             {
                 "guardContent": {
                     "text": {
-                        "text": transcript_text[:3_000],
+                        "text": transcript_text,
                         "qualifiers": ["guard_content"],
                     }
                 }
             }
         )
+    else:
+        content.append({"text": transcript_text})
     return content
 
 
@@ -526,46 +481,53 @@ def _reason(
     evidence: Mapping[str, Any],
     session_manager: Any,
 ) -> dict[str, Any]:
-    del session_manager
+    from strands import Agent
+    from strands.models import BedrockModel
+
+    options: dict[str, Any] = {
+        "model_id": MODEL_ID,
+        "region_name": os.getenv("AWS_REGION", "us-east-1"),
+        "temperature": 0.0,
+        "top_p": 0.7,
+        "max_tokens": 5000,
+    }
     guardrail_id = os.getenv("BEDROCK_GUARDRAIL_ID", "")
     guardrail_version = os.getenv("BEDROCK_GUARDRAIL_VERSION", "")
-    guardrail_enabled = bool(guardrail_id and guardrail_version)
-    request: dict[str, Any] = {
-        "modelId": MEETING_MODEL_ID,
-        "system": [{"text": MEETING_SYSTEM_PROMPT}],
-        "messages": [
+    if guardrail_id and guardrail_version:
+        options.update(
             {
-                "role": "user",
-                "content": _meeting_prompt_content(
-                    evidence,
-                    guardrail_enabled=guardrail_enabled,
-                    instruction=(
-                        "Return exactly one complete JSON object matching the "
-                        "required schema. Do not call tools and do not include "
-                        "Markdown.\n"
-                    ),
-                ),
+                "guardrail_id": guardrail_id,
+                "guardrail_version": guardrail_version,
+                "guardrail_trace": "enabled",
             }
-        ],
-        "inferenceConfig": {"temperature": 0.0, "maxTokens": 5000},
-    }
-    if guardrail_enabled:
-        request["guardrailConfig"] = {
-            "guardrailIdentifier": guardrail_id,
-            "guardrailVersion": guardrail_version,
-            "trace": "enabled_full",
-        }
-    response = boto3.client(
-        "bedrock-runtime",
-        region_name=os.getenv("AWS_REGION", "us-east-1"),
-    ).converse(**request)
-    content = response.get("output", {}).get("message", {}).get("content", [])
-    rendered = "\n".join(
-        str(block.get("text") or "")
-        for block in content
-        if isinstance(block, Mapping) and block.get("text")
-    ).strip()
-    return _json_from_model(rendered)
+        )
+
+    def invoke(instruction: str = "") -> dict[str, Any]:
+        agent = Agent(
+            model=BedrockModel(**options),
+            system_prompt=MEETING_SYSTEM_PROMPT,
+        )
+        return _json_from_model(
+            agent(
+                _meeting_prompt_content(
+                    evidence,
+                    guardrail_enabled=bool(
+                        guardrail_id and guardrail_version
+                    ),
+                    instruction=instruction,
+                ),
+                structured_output_model=_meeting_output_model(),
+            )
+        )
+
+    try:
+        return invoke()
+    except ValueError:
+        return invoke(
+            "Regenerate the complete analysis as one valid JSON object. "
+            "Use every required field and no Markdown.\n"
+        )
+
 
 def analyze_meeting(
     request: Mapping[str, Any],
@@ -642,7 +604,7 @@ def analyze_meeting(
             "meetingTranscript", {}
         )
         reasoning_input["repairReason"] = screened_untrusted.get("repairReason", "")
-        analysis = _normalize_meeting_analysis(_reason(reasoning_input, None))
+        analysis = _reason(reasoning_input, None)
     LOGGER.info(
         json.dumps(
             {
