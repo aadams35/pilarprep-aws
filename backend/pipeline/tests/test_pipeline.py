@@ -3113,6 +3113,57 @@ class WorkerTests(unittest.TestCase):
             results[1]["metadata"]["agentRuntimeSessionId"],
             runtime_session_ids[1],
         )
+
+    def test_meeting_runtime_uses_fresh_agentcore_session_per_invocation(self):
+        runtime_calls = []
+
+        class FakeAgentCore:
+            def invoke_agent_runtime(self, **kwargs):
+                runtime_calls.append(kwargs)
+                return {
+                    "response": BytesIO(
+                        b'{"provider":"agentcore-strands","analysis":{},"metadata":{}}'
+                    )
+                }
+
+        document = {
+            "idempotencyKey": "meeting-job-0001",
+            "input": {
+                "meetingId": "blue-mesa-discovery",
+                "scenarioId": "blue-mesa-payments",
+            },
+        }
+        approved = {"response": {"technical": ["Approved"]}, "request": {}}
+        transcript = {"segments": [{"speaker": "Jordan Lee", "text": "Approved."}]}
+
+        def allow_payload(payload, **_kwargs):
+            return payload, {"action": "allow"}
+
+        with (
+            patch.object(worker, "AGENT_RUNTIME_ARN", "runtime-arn"),
+            patch.object(worker, "_scope_token", return_value="signed-scope"),
+            patch.object(worker, "_screen_ai_payload", side_effect=allow_payload),
+            patch.object(worker, "aws_client", return_value=FakeAgentCore()),
+        ):
+            for _ in range(2):
+                worker._invoke_meeting_runtime(
+                    SCOPE,
+                    document,
+                    transcript,
+                    approved,
+                    4,
+                    "trace-meeting-0001",
+                )
+
+        self.assertEqual(len(runtime_calls), 2)
+        self.assertNotEqual(
+            runtime_calls[0]["runtimeSessionId"],
+            runtime_calls[1]["runtimeSessionId"],
+        )
+        self.assertTrue(
+            all(len(call["runtimeSessionId"]) >= 33 for call in runtime_calls)
+        )
+
     def test_handoff_rejects_a_stale_approved_packet_version(self):
         document = {
             "action": "handoff.generate",

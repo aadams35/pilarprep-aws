@@ -1472,6 +1472,7 @@ def _invoke_meeting_runtime(
     idempotency = require_identifier(
         document.get("idempotencyKey"), "idempotencyKey"
     )
+    # Meeting analysis is stateless, so every invocation must reach the current runtime.
     runtime_session_id = stable_identifier(
         "runtime-session",
         [
@@ -1481,6 +1482,8 @@ def _invoke_meeting_runtime(
             scope["userId"],
             scope["sessionId"],
             str(inputs["meetingId"]),
+            idempotency,
+            uuid4().hex,
         ],
         48,
     )
