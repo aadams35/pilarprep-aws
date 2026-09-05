@@ -21,6 +21,7 @@
     "test:evals": "python -m unittest discover evals/tests",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
+    "diagram:render": "node scripts/render-architecture-diagram.mjs",
     "check:publication": "node scripts/check-publication.mjs",
     "verify": "npm run check:publication && npm run typecheck && npm run lint && npm test && npm run test:backend && npm run test:evals && npm run eval:briefs && npm run build && npm run test:e2e",
     "demo:agentcore": "python backend/agentcore/local_demo.py",

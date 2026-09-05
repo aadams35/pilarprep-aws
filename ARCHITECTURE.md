@@ -1,6 +1,6 @@
 # Architecture
 
-PilarPrep is a React/TypeScript frontend with a Python serverless backend. The [service diagram](docs/architecture/pilarprep-aws-architecture.png) intentionally focuses on the active workflow; the [code map](docs/architecture/code-map.md) shows where each component is implemented.
+PilarPrep is a React/TypeScript frontend with a Python serverless backend. The [service diagram](docs/architecture/pilarprep-aws-architecture.png) follows the primary request path from left to right and places signed-in meeting audio below it. The [code map](docs/architecture/code-map.md) shows where each component is implemented.
 
 ## Browser and Access
 

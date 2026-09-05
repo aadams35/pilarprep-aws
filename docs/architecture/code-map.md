@@ -46,4 +46,4 @@ The queue and databases are AWS-managed services configured through templates, n
 
 `backend/agentcore/compatibility/handler.py` supports the retained earlier agent API. Earlier Bedrock Lambda handlers remain in `backend/bedrock/brief_generator.py` because the core template still packages them. Neither is the browser's active asynchronous entry point. Retiring those resources is separate from reorganizing the repository.
 
-The diagram SVG embeds its AWS icons and can be opened independently: [editable SVG](pilarprep-aws-architecture.svg).
+The diagram SVG embeds its AWS icons and can be opened independently: [editable SVG](pilarprep-aws-architecture.svg). Run `npm run diagram:render` to regenerate the high-resolution PNG from that vector source.
