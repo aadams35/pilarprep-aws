@@ -1,86 +1,112 @@
-# Operations
+# Operating PilarPrep
 
-## Start with the Job ID
+PilarPrep handles AI work asynchronously. The browser receives a job ID, the request waits in SQS until a worker is available, and the page checks the job until it completes. That job ID is the best starting point whenever something goes wrong.
 
-The Jobs API returns a job ID before work completes. Follow that ID through the API response, DynamoDB job record, worker logs, and model diagnostics. Do not paste customer input, bearer tokens, AWS credentials, or signed artifact URLs into public issues.
+Never place customer input, credentials, bearer tokens, or signed artifact URLs in a public issue or shared troubleshooting note.
 
-| Symptom | Check first | Then check |
+## Quick Triage
+
+| What the user sees | Check first | Likely next step |
 | --- | --- | --- |
-| Request rejected immediately | Sign-in, origin, API response, tenant/client/project scope | Cognito configuration, authorizer, application limits |
-| Job remains queued | Queue age, visible messages, event-source mapping | Worker errors, concurrency limit, permissions |
-| Job fails while generating | Worker error classification and action | Bedrock access, token limits, validation or Guardrail outcome |
-| Refinement affects the wrong content | Selected target and base packet version | Target validation, merge isolation, stale-version rejection |
-| Handoff is unavailable | Approved server packet and requested role | AgentCore permissions, tool scope, result validation |
-| Audio cannot upload | Signed-in workspace, allowed scenario, signed upload, bucket CORS | Upload constraints, expiry, object metadata |
-| Scan never progresses | Object scan status and GuardDuty result event | EventBridge rule, queue policy, authorized waiting job |
-| Transcription stops | Transcribe job status and second event | Queue delivery, object scope/version, worker analysis failure |
-| Meeting UI fails with a CloudFront page | WAF sampled requests for the job-status GET; current DynamoDB job state | Per-IP rate limits, polling cadence, HTTP response status |
-| Download fails | Current scoped artifact lookup | Object existence, URL expiry, KMS permissions |
+| Request rejected immediately | Sign-in state, allowed origin, response code, and client/project scope | Check Cognito, API authorization, or usage limits |
+| Job stays queued | Queue depth, oldest-message age, and worker event mapping | Check worker concurrency, throttles, and permissions |
+| Generation fails | Worker log for the job ID and action | Check model access, Guardrail result, output limits, or validation |
+| Refinement changes the wrong tab | Requested target and base packet version | Check target isolation and stale-version handling |
+| Approval reports a newer version | Latest draft version in DynamoDB | Reload the packet and approve the current version |
+| Handoff is unavailable | Approved packet version and requested audience | Check AgentCore invocation, scoped tools, and result validation |
+| Audio upload fails | Signed-in workspace, upload authorization, expiry, and bucket CORS | Check object limits and upload metadata |
+| Malware scan never finishes | GuardDuty result and first EventBridge delivery | Check the event rule, queue policy, and waiting job |
+| Transcription never finishes | Transcribe status and second EventBridge delivery | Check transcript location, queue delivery, and meeting job scope |
+| Page displays a CloudFront 403 | WAF sampled requests and the job's current state | Reduce polling pressure or review the approved WAF policy |
+| Download fails | Latest scoped artifact pointer | Check object existence, URL expiry, and encryption permissions |
 
-## Meeting Status and Edge Rate Limits
+## Follow One Job
 
-A blocked status request does not mean the meeting job failed. In the August 30 incident, the WAF's blanket 100-requests-per-five-minutes rule blocked four workspace job-status GETs while the same `meeting.process` job completed as `review-ready`. The browser was receiving CloudFront's HTML 403 page instead of the completed result.
+1. Capture the job ID from the `202 Accepted` response or the browser's status request.
+2. Find the matching DynamoDB record and confirm its tenant, client, project, action, version, and status.
+3. If it is queued, compare queue age with available worker capacity.
+4. If it is running, find the structured worker logs with the same job ID and trace ID.
+5. Separate queue wait from model or AgentCore duration. More workers can reduce a backlog, but they do not make one model response faster.
+6. If the job completed, confirm that the result pointer and packet version match what the browser requested.
 
-Check WAF sampled request metadata and the scoped job record before retrying transcription or replaying anything from a queue. Keep request headers, user identifiers, transcript text, and signed URLs out of incident reports. Sampled requests are not a complete access log.
+The application records timing and error categories without logging prompt or response bodies. Use those fields before increasing timeouts or replaying work.
 
-The frontend slows unchanged job-status polls up to five seconds apart. A 429 response delays further reads using `Retry-After` or `retryAfterSeconds`, within the original operation deadline. A recognized CloudFront blocked-request page allows at most three read retries, one minute apart. JSON authorization failures are not retried. No retry automatically submits another job, and unknown/HTML response bodies are never displayed as error text.
+## Queue and Dead-letter Handling
 
-WAF rate-limit changes require an explicit security review. The frontend recovery fix does not change WAF, bypass CloudFront, relax sign-in requirements, or skip GuardDuty. The existing edge limit may still be reached by multiple users sharing an IP until an approved policy change separates submissions from polling traffic.
+SQS may deliver a message more than once. The worker uses leases, idempotency records, and conditional writes so a duplicate delivery cannot create a second approved result.
 
-## Demo AI Usage Limits
+The standard deployment allows three receives before a repeatedly failing message moves to the dead-letter queue. A DLQ entry is evidence to investigate, not a request to replay blindly. Fix the underlying permission, configuration, model, or input problem first. Then use the scoped replay path only when the current packet version and approval state still make the job valid.
 
-The demo allowance is 20 AI submissions per guest identity per UTC clock hour and 200 per UTC day, shared across that identity's clients and sessions. Nova Pro remains the standard packet model. Authenticated-user (100/day), workspace (500/day), and Claude (5/day) caps are unchanged. These are application admission limits, not Bedrock credits or an AWS billing balance. They are not a global spending ceiling.
+Watch both visible queue depth and oldest-message age. A quiet application log does not prove that the queue is healthy.
 
-The counters record new AI submission attempts, including jobs that later fail; processing time and internal model retries do not consume extra submissions. Polling, downloads, and approval do not consume the AI allowance. Reusing an already-recorded idempotency key returns its existing job without consuming another submission.
+## Meeting Audio
 
-A rejected request returns `AI_USAGE_LIMIT`, the exhausted hourly/daily window, `quota.resetsAt`, and a matching `Retry-After` header. When more than one cap is exhausted, the later reset governs. Database transaction conflicts are not quota exhaustion. Increasing a configured limit preserves the existing usage counts; do not delete counters to apply a new allowance.
+The meeting path has two asynchronous pauses:
 
-## Slow Handoff Generation
+`private upload -> malware scan -> queue -> Transcribe -> queue -> meeting analysis`
 
-Compare queue wait with worker duration before increasing concurrency. A handoff on August 31 waited 24 ms in SQS but took 181 seconds in the worker, including Strands structured-output recovery. The queue was not the bottleneck.
+The audio object itself never travels through SQS. Each event carries identifiers and an object reference. The worker verifies the clean scan, scope, expected object version, and waiting job before starting transcription. When Transcribe finishes, the second event lets the worker load the transcript and continue through AgentCore and Strands.
 
-Handoff generation uses non-streaming Bedrock calls through Strands, requests the schema tool directly, and enables optimized latency only for Nova Pro. It keeps the same Guardrail, approved-context checks, scoped tools, Memory, and bounded recovery. The output token ceiling permits a complete packet; it is not a target length. No live draft is streamed to the page, so non-streaming does not remove a user-visible capability.
+If the UI stops at one stage, inspect that stage's event and job state before restarting the whole workflow. Re-uploading the same recording can create a new object version and make an older continuation intentionally invalid.
 
-`handoff_model_completed` records duration, accumulated model calls, and token usage without prompt or response text. The packet's `metadata.agentTimingsMs` separates context preparation from generation and validation. These phase timings are not pure Bedrock inference time. A structured-output recovery warning indicates additional model work; a low queue wait does not rule that out.
+## Slow AI Work
 
-An August 31 failure restored 95 AgentCore Memory events containing 2.9 million characters of repeated packet context. Bedrock returned a Guardrails input-size error as `ThrottlingException`; nested SDK retries stretched a failed attempt to 196 seconds. Batch handoffs now use fresh, project-scoped Memory sessions for each invocation, including queue retries. The approved brief and DynamoDB project state provide continuity; old conversations remain stored but are not replayed into new handoffs.
+Start by asking where the time was spent:
 
-Handoff prompts retain all six brief sections, customer inputs, evidence sources, and claim support assessments while omitting duplicated claim text, previous handoff outputs, and download/diagnostic metadata. Context is encoded as complete JSON and rejected when over the size budget, never cut mid-document. `agent_context_prepared` records prompt character count without customer text. Botocore and Strands do not add transient retries inside the handoff; SQS owns those retries. Permanent size errors return `AGENT_CONTEXT_TOO_LARGE` and terminate the job without requeueing or modifying approved content. Guardrails, source validation, and scoped persistence remain enforced for Nova Pro, Nova Micro, and Claude Sonnet.
+- A long queue wait points to worker capacity, account concurrency, or a downstream throttle.
+- A short queue wait and long worker duration point to model generation, AgentCore tool calls, validation, or repair attempts.
+- A fast completed job with a slow page points to polling, API throttling, WAF behavior, or browser rendering.
 
-Model compatibility tests also caught Micro copying an example schema narrative and Sonnet reaching its output ceiling. The structured handoff prompt now uses the tool schema without a duplicate placeholder JSON example. The schema exposes the existing minimum narrative length and artifact counts to the model, and the prompt asks for a concise, customer-specific handoff. Nova keeps a 5,000-token output ceiling; Sonnet has 8,000 tokens to finish the same required artifact set. These are maximums, not target lengths. Do not relax validation or silently switch models when testing compatibility.
+PilarPrep keeps prompts bounded, reuses AWS clients between warm Lambda invocations, and lets SQS own transient retries. AgentCore handoffs use a fresh project-scoped session for each queued invocation so an old conversation cannot grow the prompt indefinitely. Permanent size or validation failures stop clearly instead of consuming every queue retry.
 
-## Brief and Handoff State
+Do not raise worker concurrency to solve a slow individual response. It only allows more jobs to run at the same time and can increase pressure on Bedrock, AgentCore, Lambda, and account quotas.
 
-Pre-call context starts empty. A completed handoff is displayed only when its customer, client, project, approved packet version, audience, and focus match the selected view. Navigating back to a matching saved handoff reuses it without submitting another job. Changing the customer cancels the browser request and prevents late results from replacing the new workspace.
+## Demo Usage Limits
 
-Evidence assessments belong to the packet. Handoff generation preserves the approved brief's claims, source records, and coverage in both the returned response and the saved handoff. Targeted refinement reassesses the selected tab only, retains other tabs' assessments, and recalculates coverage from the current claims. Corrected context receives a distinct source reference so unchanged tabs do not silently point to rewritten evidence.
+The deployment defaults are:
 
-Coverage is the fraction of assessed claims linked to approved sources, not a probability of truth. Older packets without assessment records remain unassessed. Editing feedback does not remove the last valid assessment; intake changes are marked as pending. A failed refinement leaves the previous packet intact and displays an error next to it.
+| Scope | Default allowance |
+| --- | ---: |
+| Guest identity | 20 AI submissions per UTC hour and 200 per UTC day |
+| Signed-in user | 100 per UTC day |
+| Workspace | 500 per UTC day |
+| Claude Sonnet | 5 per UTC day |
 
-## Dead-letter Queue
+These are application admission limits, not Bedrock credits or a guaranteed spending ceiling. A submitted job counts even when it later fails. Polling, downloads, and approval do not count as new AI submissions, and a repeated idempotency key returns the existing job.
 
-The standard queue redrives repeatedly failing messages to a DLQ. A DLQ does not automatically make the failed operation safe to replay. First classify the cause, correct permissions/configuration or bad input as appropriate, and verify the job's current approval/version state. Use the restricted operator replay path for eligible jobs. Do not repeatedly replay stale approvals or permanent validation failures.
+An exhausted limit returns `AI_USAGE_LIMIT`, the affected window, a reset time, and `Retry-After`. Raising a configured limit preserves the existing counters; deleting counters is not the way to apply a new allowance.
 
-The code has limits on replay and separates retryable failures from non-retryable requests. Watch both queue age and DLQ message count; an empty error log does not prove the queue is healthy.
+## Packet State and Evidence
 
-## Observability
+A handoff is reusable only when its tenant, client, project, approved packet version, audience, and focus match the current request. Catch-up reads the latest approved packet and remains read-only.
 
-See [Multi-user operation and scaling](scaling.md) for account headroom, the configurable SQS worker limit, concurrent-user checks, alert thresholds, and capacity rollback.
+Evidence coverage is the share of assessed claims linked to approved sources. It is not a truth score. A refinement reassesses the selected tab, keeps untouched tabs unchanged, and makes the previous approval stale. A failed refinement leaves the last valid packet available.
 
-The templates configure CloudWatch logs, metrics, alarms, tracing, and notification resources. Not all resources appear in the simplified path diagram. Deployment-specific outputs and CloudFormation parameters are authoritative; do not assume every optional email subscription is confirmed.
+Meeting analysis follows a similar rule: transcript-backed changes remain proposals until a person accepts, edits, or rejects them. Only accepted changes can update project state or feed the next handoff.
 
-Useful indicators include queue age, failures by action, generation latency, model routing, estimated token cost, cross-scope attempts, RAG retrieval failures, clean scans, and transcription continuation events. An application's token-cost estimate is not the complete AWS bill.
+## Monitoring
 
-## Cost Controls
+The infrastructure templates configure CloudWatch logs, metrics, tracing, alarms, and an optional notification path. The most useful signals are:
 
-SQS buffers work; the Lambda event-source mapping controls parallel processing. This bounds pressure on Bedrock and AgentCore without requiring provisioned concurrency. It does not eliminate invocation, model, storage, scanning, transcription, observability, or supporting-service costs.
+- visible jobs and oldest SQS message age
+- worker throttles, duration, and failures by action
+- DLQ message count
+- Bedrock and AgentCore latency, token use, and validation retries
+- API 429 and CloudFront/WAF 403 responses
+- failed scope checks or cross-client access attempts
+- GuardDuty scan outcomes and transcription continuation events
+- retrieval failures and evidence coverage changes
 
-Use guest/user limits, model routing, bounded tokens/retries, and the live-generation switch. Budgets and alarms provide notice rather than a guaranteed real-time spending cap. Review current AWS prices before making any cost promise.
+Application cost estimates cover model tokens only when pricing is configured. They are not the AWS bill.
 
-## Optional Live Verification
+## Live Checks and Cost
 
-The `smoke:*` scripts are separate from CI because they require authorized AWS access and may incur charges. Read their required environment variables and restrictions first. Use only synthetic data and your own stack outputs. The default `npm run verify` does not need an AWS account.
+The `smoke:*` commands use deployed AWS resources and can incur charges. Read each script first, use synthetic data, and run it only with an authorized profile. The normal `npm run verify` suite is offline.
+
+SQS controls how quickly accepted work reaches Lambda; it does not remove the cost of Lambda execution, model tokens, AgentCore, storage, malware scanning, transcription, or monitoring. Keep the usage limits, bounded output sizes, retry limits, and live-generation switch in place. AWS Budgets sends alerts but is not an immediate shutdown control.
 
 ## Cleanup
 
-Inspect `DeletionPolicy`, bucket versioning/lifecycle, and DynamoDB deletion protection before deleting any stack. Retained data, KMS keys, packaging artifacts, and other nonempty buckets may survive stack deletion and continue to incur charges. Back up only the records you are authorized to retain. Never use a recursive cleanup command against a path or bucket that has not been explicitly verified.
+Before deleting a stack, inspect its retention and deletion policies. Versioned buckets, KMS keys, deployment artifacts, and retained DynamoDB data may survive stack deletion and continue to incur charges. Back up only data you are authorized to keep, and verify every bucket or path before removing anything.
+
+See [scaling](scaling.md) for worker capacity, multi-user behavior, and a measured rollout plan.

@@ -1,6 +1,6 @@
 # Architecture to Code
 
-Use the same labels as the [architecture diagram](pilarprep-aws-architecture.png). Managed AWS services live in infrastructure templates; they do not need placeholder source folders pretending to implement the service.
+Use this map when you want to move from a box in the [architecture diagram](pilarprep-aws-architecture.png) to the code or template behind it. Managed AWS services appear in the infrastructure column because AWS runs them; there is no placeholder application folder for a queue, table, or distribution.
 
 | Diagram component | Application code | Infrastructure |
 | --- | --- | --- |
@@ -32,18 +32,18 @@ Use the same labels as the [architecture diagram](pilarprep-aws-architecture.png
 | AWS KMS (not expanded in the diagram) | Encryption through AWS service configuration | [Application encryption key](../../infrastructure/bedrock.yaml), [data and queue key settings](../../infrastructure/jobs-pipeline.yaml) |
 | Secrets Manager and IAM (not expanded in the diagram) | [Application scope](../../backend/pipeline/state.py), [agent scope validation](../../backend/agentcore/common/security.py) | [API-origin secret and service roles](../../infrastructure/jobs-pipeline.yaml), [scope secret and agent roles](../../infrastructure/agentcore.yaml) |
 
-## Follow One Request
+## Follow a Request Through the Code
 
-The blue dashed **Brief evidence retrieval** connection represents the AI Worker retrieving approved customer evidence before generating or refining a brief. The neutral dashed AgentCore connection serves handoff, catch-up, and meeting analysis. Both use the Knowledge Base, but the application chooses the retrieval path by action.
+Start with `requestPipelineJob` in the React app, then follow `handler` in the Jobs API and `handler` in the AI Worker. The worker chooses the Bedrock brief path or the AgentCore workflow based on the action. Shared job state lives in `pipeline/state.py`, while meeting uploads and transcription state live in `pipeline/meeting.py`.
 
-WAF and ACM are separate AWS services associated with CloudFront, not built-in components. Their individual icons are omitted only to simplify this view; their configuration remains unchanged. See AWS documentation for [WAF association](https://docs.aws.amazon.com/waf/latest/developerguide/web-acl-associating-aws-resource.html) and [ACM certificates with CloudFront](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cnames-and-https-requirements.html).
+The blue dashed **Brief evidence retrieval** line shows the worker loading approved customer evidence before brief generation or refinement. The neutral AgentCore retrieval line serves handoff, catch-up, and meeting analysis. Both reach the same Knowledge Base, but the action determines which code requests and validates the evidence.
 
-Start with `requestPipelineJob` in the React app. Follow `handler` in the Jobs API, then `handler` in the AI Worker. From there choose the Bedrock generator or AgentCore runtime. Shared job state is in `pipeline/state.py`; audio is in `pipeline/meeting.py`.
+WAF and ACM are separate AWS services associated with CloudFront. Their icons are folded into the CloudFront note so the primary flow remains readable. See AWS documentation for [WAF association](https://docs.aws.amazon.com/waf/latest/developerguide/web-acl-associating-aws-resource.html) and [ACM certificates with CloudFront](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cnames-and-https-requirements.html).
 
-The queue and databases are AWS-managed services configured through templates, not additional Python applications. This is why their names appear under `infrastructure/` and in this map rather than as empty source folders.
+The diagram's **Validate + save** box is a stage inside the AI Worker, not another Lambda function.
 
 ## Compatibility
 
-`backend/agentcore/compatibility/handler.py` supports the retained earlier agent API. Earlier Bedrock Lambda handlers remain in `backend/bedrock/brief_generator.py` because the core template still packages them. Neither is the browser's active asynchronous entry point. Retiring those resources is separate from reorganizing the repository.
+`backend/agentcore/compatibility/handler.py` supports the earlier agent API during upgrades. The core template also still packages earlier Bedrock handlers from `backend/bedrock/brief_generator.py`. Neither one is the browser's active asynchronous entry point. Removing them safely requires a separately tested infrastructure migration.
 
-The diagram SVG embeds its AWS icons and can be opened independently: [editable SVG](pilarprep-aws-architecture.svg). Run `npm run diagram:render` to regenerate the high-resolution PNG from that vector source.
+The [editable SVG](pilarprep-aws-architecture.svg) contains its AWS icons, so it can be opened on its own. Run `npm run diagram:render` to regenerate the high-resolution PNG.

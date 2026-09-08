@@ -66,7 +66,7 @@ demo-assets/               Synthetic BlueMesa meeting audio
 tests/                    Frontend unit and browser tests
 evals/                    Offline quality and regression scenarios
 scripts/                  Deployment, publication checks, and optional live smoke tests
-docs/                     Architecture, operations, and engineering decisions
+docs/                     Architecture, operations, scaling, and supporting guides
 ```
 
 ## Run Locally
@@ -97,9 +97,7 @@ The default verification suite uses local fixtures and mocked AWS services; it d
 ## Further Reading
 
 - [Deployment](DEPLOYMENT.md): prerequisites, stack order, configuration, and validation.
-- [Resource names](docs/resource-names.md): physical storage names, migration safeguards, and rollback retention.
 - [Security](SECURITY.md): demo boundaries, reporting, and known production gaps.
 - [Operations](docs/operations.md): failed jobs, DLQ handling, audio events, and cost controls.
 - [Scaling](docs/scaling.md): simultaneous users, worker limits, load checks, and a phased capacity plan.
-- [Engineering decisions](docs/engineering-decisions.md): tradeoffs and remaining work.
 - [Contributing](CONTRIBUTING.md) and [attribution](NOTICE.md).

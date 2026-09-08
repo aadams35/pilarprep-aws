@@ -1,92 +1,140 @@
-# Deploy to AWS
+# Deploy PilarPrep to AWS
 
-This guide deploys your own copy. Publishing this repository does not update the existing PilarPrep site. The scripts change real AWS resources and may incur charges; inspect them and your account identity before running them.
+This guide creates a new PilarPrep environment from the repository. The scripts deploy real AWS resources and can incur charges, so use a reviewed deployment role and confirm the account before every run.
 
-## Prerequisites
+## Before You Start
 
-- PowerShell 7, Git, Node.js 22.13+, Python, and AWS CLI v2.
-- An AWS account and an assumed deployment role. Never use root credentials.
-- The supplied role template or an equivalent reviewed deployment policy. The Jobs script currently checks for the `PilarPrepHackathonDeployer` assumed role name.
-- Access to the configured Bedrock models and the services used by the templates in the selected region. The examples use `us-east-1`.
-- Permission to create IAM resources, private buckets, CloudFront/WAF, the queue, database, model safeguards, AgentCore resources, and meeting evidence services.
+You need:
 
-The AgentCore script installs a pinned packaging tool and prepares Python 3.12 ARM64 dependencies. Its initial packaging needs network access. No Docker build is required by that script.
+- PowerShell 7, Git, Node.js 22.13+, Python 3.12, and AWS CLI v2.
+- An AWS account with access to the required Bedrock models in your chosen region.
+- An assumed deployment role with permission to create the services in [infrastructure](infrastructure/). Do not deploy as the root user.
+- An HTTPS origin for browser and Cognito configuration. The examples use `us-east-1`.
 
-## 1. Verify the Source and Identity
+The AgentCore deployment downloads pinned Python packaging dependencies the first time it runs. Docker is not required.
+
+## 1. Check the Repository and AWS Identity
+
+Install the local tools and run the offline verification suite:
 
 ```powershell
 npm ci
 python -m pip install -r requirements-dev.txt
 npx playwright install chromium
 npm run verify
-$env:AWS_PROFILE = "pillarprep-deployer"
-aws sts get-caller-identity
 ```
 
-Refresh your organization's sign-in using its configured method. Do not export credentials into the repository or browser configuration. Account identity is not proof that every required deployment permission is available.
+Then select your AWS profile and confirm the account:
 
-An administrator can review [infrastructure/deployment-role.yaml](infrastructure/deployment-role.yaml) to provision the deployment role. Review trust and permission parameters for your account rather than granting access to a copied principal.
+```powershell
+$env:AWS_PROFILE = "pillarprep-deployer"
+aws sts get-caller-identity --profile $env:AWS_PROFILE
+```
 
-## 2. Choose the Browser Origin
+Refresh the profile with the sign-in method already configured by your organization. Never place exported credentials in this repository or in frontend environment variables.
 
-Use an HTTPS origin you control, with no trailing slash. For a custom hostname, arrange the DNS record and an ACM certificate in `us-east-1`. Do not use the hosted PilarPrep demo's domain for your own deployment.
+An administrator can use [infrastructure/deployment-role.yaml](infrastructure/deployment-role.yaml) as a starting point for the deployment role. Review its trust policy and account-specific parameters before applying it.
 
-If you will use a new CloudFront default hostname, it is not known yet. Use `https://deployment-pending.invalid` as a temporary, nonfunctional origin during bootstrap, then replace it with the actual distribution URL in step 5. Do not invite users to sign in until origins and callback URLs are corrected.
+## 2. Choose the Allowed Browser Origin
+
+Use an HTTPS URL with no trailing slash:
 
 ```powershell
 $origin = "https://deployment-pending.invalid"
 ```
 
-## 3. Deploy Core Resources and AgentCore
+The placeholder is useful during the first deployment because the CloudFront hostname does not exist yet. It is deliberately nonfunctional. Replace it with the real CloudFront or custom-domain URL before inviting anyone to sign in.
+
+For a custom hostname, create or supply:
+
+- A public DNS record.
+- An ACM certificate in `us-east-1`.
+- The matching Cognito callback and logout URLs.
+
+## 3. Deploy the AWS Stacks
+
+The first deployment follows this order:
 
 ```powershell
 .\scripts\deploy-bedrock.ps1 -Region us-east-1 -AllowedOrigin $origin
 .\scripts\deploy-agentcore.ps1 -Region us-east-1 -Profile $env:AWS_PROFILE -AllowedOrigin $origin
-```
-
-The Bedrock stack owns shared data resources, model permissions, Guardrails, the guest identity pool, and compatibility resources. The first AgentCore deployment creates its runtime, tools, memory, signing secret, and SDK layer. It can precede the Jobs stack; the later deployment adds the unified worker and Knowledge Base authorizations.
-
-## 4. Deploy the Shared Jobs Pipeline and Frontend
-
-```powershell
 .\scripts\deploy-jobs-pipeline.ps1 -Region us-east-1 -Profile $env:AWS_PROFILE -AllowedOrigin $origin
 .\scripts\deploy-frontend.ps1 -Region us-east-1
 ```
 
-The Jobs script reads the core/AgentCore outputs, packages the API and worker, and deploys the queue, event rules, workspace identity, meeting storage, and retrieval resources. By default it also prepares synthetic evidence/audio and updates AgentCore authorization. `-SkipMeetingAssets` and `-SkipAgentCoreAuthorization` are intended for controlled redeployments, not a fully initialized first demo.
+Why this order:
 
-Synthetic speech generation uses Amazon Polly and is billable. The bundled MP3 is available for manual demonstration, but the preparation script also provisions the evidence needed by the AWS workflow.
+1. The Bedrock stack creates shared storage, encryption, Guardrails, model permissions, and guest identity resources.
+2. The AgentCore stack creates the runtime, governed tools, memory, signing secret, and runtime layer.
+3. The Jobs stack connects the API, queue, worker, application state, audio workflow, and Knowledge Base.
+4. The frontend stack builds the React app, uploads it to private S3, and creates or updates CloudFront.
 
-The frontend script reads stack outputs, builds the static app, uploads it to private S3, and invalidates CloudFront. For a custom hostname, supply `-CustomDomainName` and `-AcmCertificateArn`; configure its DNS record to the distribution separately.
+The Jobs deployment prepares the fictional evidence and meeting assets used by the demo. Amazon Polly and live model calls can incur charges. Use `-SkipMeetingAssets` only for a controlled redeployment after the initial setup.
 
-## 5. Finalize Origins
+## 4. Replace the Temporary Origin
 
-Read the frontend stack outputs and set `$origin` to your actual HTTPS distribution/custom-domain URL. Redeploy the core and Jobs stacks with that origin, skipping regeneration of unchanged meeting assets. The Jobs script refreshes AgentCore authorization and origin settings. Republish the frontend so it contains current outputs.
+Read the frontend outputs:
 
 ```powershell
-aws cloudformation describe-stacks --stack-name pillarprep-frontend --region us-east-1 --query "Stacks[0].Outputs" --output table
-# Set $origin to your distribution's HTTPS URL before continuing.
+aws cloudformation describe-stacks `
+  --stack-name pillarprep-frontend `
+  --region us-east-1 `
+  --query "Stacks[0].Outputs" `
+  --output table
+```
+
+Set `$origin` to the actual HTTPS URL, then refresh the backend origin settings and rebuild the frontend:
+
+```powershell
+$origin = "https://YOUR-CLOUDFRONT-OR-CUSTOM-DOMAIN"
 .\scripts\deploy-bedrock.ps1 -Region us-east-1 -AllowedOrigin $origin
 .\scripts\deploy-jobs-pipeline.ps1 -Region us-east-1 -Profile $env:AWS_PROFILE -AllowedOrigin $origin -SkipMeetingAssets
 .\scripts\deploy-frontend.ps1 -Region us-east-1
 ```
 
-If you expose both a custom hostname and the CloudFront hostname, pass the second one as `-SecondaryAllowedOrigin` to backend deployments. Verify bucket CORS and Cognito callback/logout URLs match the origins you actually use.
+If both the custom hostname and CloudFront hostname will be used, pass the second URL as `-SecondaryAllowedOrigin` where supported. Check S3 CORS and Cognito callback/logout settings against the exact origins.
 
-## 6. Verify the Deployment
+## 5. Walk the Deployed Flow
 
-- Confirm CloudFormation operations complete successfully and CloudFront invalidation finishes.
-- Open your HTTPS site in a fresh browser and generate a synthetic brief.
-- Refine one tab, confirm other tabs stay unchanged, then approve and explicitly create the handoff.
-- Sign in before uploading the synthetic BlueMesa audio. Confirm scan, transcription, analysis, review, and follow-on flow.
-- Verify unsigned/unauthorized requests fail and private objects cannot be fetched anonymously.
-- Check logs, queue age, and DLQ contents. A successful upload is not proof of completed meeting analysis.
+Use a fresh browser and synthetic data:
 
-The optional `smoke:*` commands exercise configured AWS paths and can generate model charges. Review their environment variables before using them. Older Bedrock/AgentCore smoke scripts also exercise compatibility resources, not only the shared Jobs API.
+1. Open the HTTPS site and generate a brief.
+2. Refine one tab and confirm the others do not change.
+3. Approve the current packet and create the pre-call handoff.
+4. Open **Catch-up** and generate a role-aware summary from the latest approved packet.
+5. Sign in, upload the synthetic BlueMesa recording, and follow it through scanning, transcription, review, and follow-up.
+6. Download a DOCX and confirm private S3 objects are not anonymously accessible.
+7. Review CloudWatch logs, queue age, and the DLQ before calling the deployment healthy.
 
-## Deployment Notes
+The optional `smoke:*` commands use configured AWS resources and can invoke paid models. Read each script before running it. The normal `npm run verify` suite is offline.
 
-- Templates are in [infrastructure/](infrastructure/). S3 names use `pilarprep-<environment>-<purpose>-<account>-<region>`; CloudFront uses `pilarprep-<environment>-web`. Existing stacks preserve their storage settings until an explicit [retained-data migration](docs/resource-names.md). Historical stack names and `PILLARPREP_*` environment names remain compatible.
-- The active application uses one shared job pipeline. Earlier API/worker and table resources remain in the core templates. Plan their retirement as a separate migration.
-- Stack deletion can leave retained or nonempty resources. Read [operations](docs/operations.md) before cleanup.
-- This repository layout is covered by local packaging and application tests. A new account still requires permissions, quota/model access, regional availability, and a live end-to-end deployment check.
+## Existing Environments and Storage
+
+New S3 names follow:
+
+`pilarprep-<environment>-<purpose>-<account>-<region>`
+
+Purpose labels include `web-assets`, `artifacts`, `meeting-evidence`, `deployments`, and `evidence-vectors`. CloudFront uses a display name such as `pilarprep-<environment>-web`.
+
+An S3 bucket cannot be renamed in place. Changing a name parameter on an environment with data can replace the bucket with an empty one. Treat any storage rename as a planned migration with inventory, copy verification, rollback, and a quiet cutover window. The helper in `scripts/migrate_resource_names.py` exists for the original PilarPrep migration; read it before using it against another environment.
+
+Historical stack names and `PILLARPREP_*` environment variables remain for compatibility. Cosmetic cleanup is not a reason to replace stateful AWS resources.
+
+## Updating an Existing Deployment
+
+CloudFormation parameters are sticky, but deployment scripts can still update more than the one setting you care about. Review the full command and resulting change set before applying it.
+
+The active frontend uses the shared Jobs API. Older compatibility handlers remain in the core templates so existing environments can be upgraded safely. Retire them only through a separately tested infrastructure migration.
+
+## Cleanup
+
+Deleting a stack does not guarantee that every object disappears. Versioned buckets, retained resources, KMS keys, and deployment artifacts may remain and continue to cost money.
+
+Before teardown:
+
+1. Inspect each stack's deletion and retention policies.
+2. Export only data you are authorized to keep.
+3. Confirm bucket names and object ownership before any cleanup.
+4. Delete retained resources separately only after the stacks and dependencies are understood.
+
+See [operations](docs/operations.md) for troubleshooting and [security](SECURITY.md) for the demo's data boundaries.

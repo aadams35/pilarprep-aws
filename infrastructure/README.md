@@ -1,15 +1,15 @@
-# Infrastructure
+# AWS Infrastructure
 
-These templates configure the AWS services shown in the [architecture diagram](../docs/architecture/pilarprep-aws-architecture.png). Application handlers live under `backend/`; managed services are represented here, not by empty source folders.
+This folder contains the CloudFormation and SAM templates behind the [architecture diagram](../docs/architecture/pilarprep-aws-architecture.png). Application behavior lives in `backend/`; this folder describes the AWS services, permissions, and connections that run it.
 
-| Template | Responsibility | Deployment script |
+| Template | What it creates | Deployment script |
 | --- | --- | --- |
-| [deployment-role.yaml](deployment-role.yaml) | Reviewed deployment-role trust and permissions | Administrator bootstrap |
-| [bedrock.yaml](bedrock.yaml) | Shared data/key resources, guest identity, Guardrails, model permissions, and retained compatibility API | [deploy-bedrock.ps1](../scripts/deploy-bedrock.ps1) |
-| [agentcore.yaml](agentcore.yaml) | Runtime, Gateway, tool Lambda, Memory, signing, SDK layer, and compatibility routing | [deploy-agentcore.ps1](../scripts/deploy-agentcore.ps1) |
-| [jobs-pipeline.yaml](jobs-pipeline.yaml) | Jobs API, AI Worker, queue/DLQ, active state, identity, audio security, events, and Knowledge Base | [deploy-jobs-pipeline.ps1](../scripts/deploy-jobs-pipeline.ps1) |
-| [frontend.yaml](frontend.yaml) | CloudFront, private frontend S3, response headers, WAF, and workspace API origin | [deploy-frontend.ps1](../scripts/deploy-frontend.ps1) |
+| [deployment-role.yaml](deployment-role.yaml) | The reviewed role used to deploy PilarPrep | Administrator bootstrap |
+| [bedrock.yaml](bedrock.yaml) | Shared storage and encryption, guest identity, Bedrock Guardrails, model permissions, and compatibility resources | [deploy-bedrock.ps1](../scripts/deploy-bedrock.ps1) |
+| [agentcore.yaml](agentcore.yaml) | AgentCore Runtime, Strands tools, Memory, request signing, and compatibility routing | [deploy-agentcore.ps1](../scripts/deploy-agentcore.ps1) |
+| [jobs-pipeline.yaml](jobs-pipeline.yaml) | Jobs API, SQS and DLQ, AI Worker, application state, audio processing, events, and the Knowledge Base | [deploy-jobs-pipeline.ps1](../scripts/deploy-jobs-pipeline.ps1) |
+| [frontend.yaml](frontend.yaml) | CloudFront, private frontend S3, response headers, WAF, and the API origin | [deploy-frontend.ps1](../scripts/deploy-frontend.ps1) |
 
-Initial order is core Bedrock resources, AgentCore bootstrap, shared Jobs pipeline, then frontend. The Jobs script updates AgentCore with the newly created worker and retrieval permissions. Finalize origins after CloudFront assigns a new hostname.
+A new environment is deployed in this order: Bedrock resources, AgentCore, the shared jobs pipeline, then the frontend. The Jobs deployment connects AgentCore to the worker and evidence permissions. After CloudFront provides the final hostname, run the origin-configuration step described in [DEPLOYMENT.md](../DEPLOYMENT.md).
 
-See [DEPLOYMENT.md](../DEPLOYMENT.md) for the full sequence. Review change sets and stateful-resource replacement before applying infrastructure changes.
+Review the CloudFormation change set before every update, especially when a change could replace a bucket, table, key, or other stateful resource.

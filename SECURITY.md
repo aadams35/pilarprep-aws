@@ -1,31 +1,36 @@
 # Security
 
-## Demo Boundaries
+PilarPrep is a public demonstration built with synthetic customer data. Its security model is designed to keep the application, saved packets, and uploaded meeting evidence private while still allowing people to try the workflow.
 
-The public site is a demonstration with synthetic customer information. Do not enter secrets or confidential customer data. Private audio upload requires authentication and is currently restricted to the BlueMesa meeting workflow. Names in the demo are retained intentionally; that is not a claim that names are never personal data.
+## How the Demo Is Protected
 
-## Implemented Controls
+| Boundary | What PilarPrep does |
+| --- | --- |
+| Website | CloudFront serves the React application from a private S3 origin over HTTPS. The frontend bucket is not a public website bucket. |
+| Identity | Cognito provides temporary guest credentials for the bounded demo and JWT-based access for signed-in users. The backend validates identity and project scope on every request. |
+| API | Requests pass through API Gateway. Browser state and client-supplied IDs are never treated as authorization by themselves. |
+| Jobs | Idempotency records, leases, version checks, and controlled SQS processing protect against duplicate or stale updates. Repeated failures move to a dead-letter queue for review. |
+| Stored data | Artifacts, job inputs, meeting evidence, and transcripts remain in private S3. DynamoDB holds scoped job and project state. Encryption is configured through AWS-managed or customer-managed keys. |
+| Meeting audio | Signed-in users upload directly to a private bucket. GuardDuty Malware Protection must report a clean result before transcription begins. |
+| Generative AI | Bedrock Guardrails screen supported requests and responses. Application validation checks structure, scope, versions, contradictions, and evidence before a result is saved. |
+| Retrieved evidence | Knowledge Base searches are filtered to the authorized tenant, client, and project, then checked again before the evidence reaches a workflow. |
 
-- CloudFront with a private S3 REST origin, Origin Access Control, HTTPS, security headers, and WAF configuration.
-- Cognito-backed guest IAM/SigV4 and signed-in JWT paths, followed by server-side scope checks.
-- Private artifact/evidence storage, KMS configuration, and constrained download/upload authorization.
-- Job idempotency, leases, version checks, controlled queue processing, and a DLQ.
-- GuardDuty Malware Protection before uploaded audio reaches Transcribe.
-- Bedrock Guardrails and application validation; their exact application depends on the action and deployed settings.
-- Authorized-evidence retrieval with tenant/client/project checks and explicit human review before meeting proposals are committed.
+Human review remains part of the design. Meeting analysis proposes changes; it does not silently rewrite an approved packet or project memory.
 
-## Important Limits
+## Deliberate Limits
 
-GuardDuty is a malware scanner, not a semantic content moderator. Bedrock Guardrails do not guarantee factual correctness. Source-coverage indicators are heuristic and can be wrong. PII detection and redaction are intentionally disabled across workflows: Comprehend is not called, and names, contact details, and other supplied context can remain in model requests and saved packets. Access controls and human review still apply. Only submit information you are authorized to process; the public demonstration remains synthetic-data-only.
+The demo keeps names and roles because they are essential to stakeholder preparation. It does not use Amazon Comprehend for PII detection or redact names before model calls. Only submit information you are authorized to process, and do not enter secrets, confidential customer data, or real meeting recordings into the public demo.
 
-This repository does not establish regulatory compliance, a penetration-test result, or a production SLA. Tenant lifecycle administration, evidence approval separation, data-subject requests, deletion testing, and broader adversarial evaluation remain production work. Retained compatibility endpoints should be reviewed before exposing a new deployment.
+GuardDuty checks uploaded files for malware. It does not judge the meaning, appropriateness, or accuracy of a conversation. Bedrock Guardrails reduce specific content risks, but they do not guarantee factual correctness. Citations and evidence-coverage indicators help a reviewer inspect a claim; they are not probabilities of truth.
 
-## Report a Vulnerability
+This repository is not a compliance certification, penetration-test report, or production service-level commitment. A production rollout would also need formal tenant administration, retention and deletion testing, data-classification policy, stronger separation between evidence submission and approval, security testing, and a documented incident-response process.
 
-Use the repository's **Security -> Report a vulnerability** option when available. Otherwise contact the maintainer privately through the contact information on [their GitHub profile](https://github.com/aadams35). Do not post access tokens, signed URLs, customer content, or exploit details in a public issue.
+## Reporting a Vulnerability
 
-Include the affected component, a synthetic reproduction, expected/actual behavior, and impact. No response-time commitment is implied for this demonstration project.
+Use GitHub's **Security -> Report a vulnerability** option when it is available. Otherwise, contact the maintainer privately through [their GitHub profile](https://github.com/aadams35). Do not include credentials, signed URLs, customer content, or exploit details in a public issue.
 
-## Publication Checks
+A useful report includes the affected area, a synthetic reproduction, the expected and actual behavior, and the likely impact. This demonstration does not promise a response time.
 
-`npm run check:publication` checks for common credential formats, signed URLs, private-key material, machine-specific paths, forbidden local files, and broken local documentation links. It is a safeguard, not proof that a repository contains no secrets. Review the exact staged files before pushing.
+## Before Publishing a Change
+
+Run `npm run check:publication`. It looks for common credential formats, signed URLs, private-key material, machine-specific paths, forbidden local files, and broken documentation links. It is a useful backstop, not proof that a repository contains no sensitive data, so review the staged files before every push.

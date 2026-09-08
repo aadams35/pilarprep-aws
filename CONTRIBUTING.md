@@ -1,24 +1,27 @@
 # Contributing
 
-Keep changes scoped to a customer workflow or an infrastructure responsibility. Follow the [architecture-to-code map](docs/architecture/code-map.md) when deciding where code belongs.
+Thanks for taking a look at PilarPrep. The easiest changes to review are small, connected to one user workflow or AWS responsibility, and backed by a test that explains the expected behavior.
+
+## Making a Change
 
 1. Create a branch from `main`.
-2. Use synthetic fixtures only. Never commit credentials, customer documents, recordings, exports, or generated deployment state.
-3. Add tests for behavior changes, especially authorization, refinement isolation, retries, and approval versions.
-4. Run `npm run verify` after installing the dependencies listed in the README.
-5. Explain the behavior changed, verification performed, and any deployment implications in a pull request.
+2. Use synthetic data only. Never commit credentials, customer documents, recordings, exported state, or generated deployment files.
+3. Follow the [architecture-to-code map](docs/architecture/code-map.md) to find the right owner for the change.
+4. Add focused tests, especially for authorization, refinement isolation, retries, and approval versions.
+5. Run `npm run verify`.
+6. In the pull request, explain what changed for the user, how it was verified, and whether it affects deployment.
 
-## Local Dependencies
+## Local Setup
 
-Node.js 22.13+, npm, Python 3.12, and Chromium for Playwright are sufficient for offline verification. Use a Python virtual environment when possible and install `requirements-dev.txt`. The AgentCore runtime has its own pinned deployment dependencies in `backend/agentcore/runtime/requirements.txt`.
+Offline verification uses Node.js 22.13+, npm, Python 3.12, and Chromium for Playwright. A Python virtual environment is recommended; install `requirements-dev.txt` inside it. AgentCore packages its own pinned runtime dependencies from `backend/agentcore/runtime/requirements.txt`.
 
-## Review Boundaries
+## Guardrails for Contributors
 
-- Keep API scope checks on the server; browser state is not an authorization boundary.
-- Preserve unrelated tabs when refining a selected brief.
-- Do not label heuristic evidence coverage as a probability of truth.
-- Keep malware scanning separate from content safety and privacy policy.
-- Do not deploy or invoke live models from pull-request CI.
-- Do not rename physical AWS resources as part of file cleanup. Treat replacement or deletion as an explicit migration.
+- Keep authorization and scope checks on the server. Browser state is not a security boundary.
+- A refinement may regenerate the selected brief tab, but it must preserve every other tab.
+- Describe evidence coverage as traceability, not a probability that a claim is true.
+- Keep malware scanning, content safety, and privacy policy as separate concerns.
+- Pull-request checks must not deploy infrastructure or invoke paid models.
+- Treat changes to stateful AWS resources as migrations, even when the desired change appears cosmetic.
 
-See [NOTICE.md](NOTICE.md) for attribution and reuse terms. Security issues should follow [SECURITY.md](SECURITY.md), not a public issue containing private evidence.
+See [SECURITY.md](SECURITY.md) for private vulnerability reporting and [NOTICE.md](NOTICE.md) for attribution and reuse terms.

@@ -1,11 +1,16 @@
 # Synthetic Demo Data
 
-`demo-scenarios.json` defines the fictional customer scenarios used in local examples and evaluation. `blue-mesa-evidence/` contains the bounded retrieval corpus and its metadata sidecars. `brief-quality-rubric.json` defines offline regression expectations.
+Everything in this folder is fictional and safe to use in a public demonstration.
 
-BlueMesa Payments already operates on AWS. Its example focuses on a bounded payroll-partner integration, not an initial migration from on-premises infrastructure. The source material includes both decision-makers and stakeholders so the briefing can identify names, positions, priorities, and open questions.
+- `demo-scenarios.json` contains the customer scenarios shown in the application.
+- `blue-mesa-evidence/` is the bounded evidence collection used by retrieval tests and the BlueMesa workflow.
+- `brief-quality-rubric.json` defines the offline quality expectations.
+- `blue-mesa-meeting-script.json` is the script behind the synthetic meeting recording.
 
-`blue-mesa-meeting-script.json` is the synthetic recording script. The corresponding audio is [blue-mesa-discovery.mp3](../demo-assets/blue-mesa-discovery.mp3). The audio is selected and uploaded by the user; it is not automatically injected into a meeting.
+BlueMesa Payments already runs its payment platform on AWS. The scenario is about adding a controlled payroll-partner integration, not moving an on-premises system to AWS. Its records include decision-makers and stakeholders so PilarPrep can return names, positions, priorities, and unresolved questions.
 
-The [preparation script](../scripts/prepare-blue-mesa-rag.ps1) can publish this evidence to an authorized demo Knowledge Base and regenerate demo speech using Amazon Polly. That operation uses AWS and may incur charges. It is not part of CI or local verification.
+The corresponding recording is [blue-mesa-discovery.mp3](../demo-assets/blue-mesa-discovery.mp3). A user chooses and uploads it during the meeting workflow; the application does not inject it automatically.
 
-Do not replace these fixtures with actual customer information in a public repository.
+[prepare-blue-mesa-rag.ps1](../scripts/prepare-blue-mesa-rag.ps1) can publish the evidence to an authorized demo Knowledge Base and regenerate the speech with Amazon Polly. That command uses AWS services and may incur charges, so it is not part of CI or offline verification.
+
+Keep real customer information out of this public repository.

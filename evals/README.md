@@ -1,56 +1,53 @@
-# Model Evaluation
+# Evaluating PilarPrep Models
 
-Compare a candidate Bedrock model with Nova Pro using PilarPrep's prompts, output contracts and a fixed set of **28 synthetic scenarios**. Results include structural checks, an optional Strands Evals judge, latency, token usage and a human-review worksheet.
+This suite answers a practical question: will a candidate model produce useful, grounded PilarPrep output without breaking the application's contracts?
 
-This is separate from the live app. It does not deploy anything, change the production model, enqueue jobs, upload recordings, or write customer state. **Only `-Live` / `--live` invokes paid models.**
+It runs the real prompt builders and validators against 28 fictional scenarios. A run can report structure, factual requirements, evidence use, latency, token usage, an optional Strands Evals score, and a worksheet for human review.
 
-## Start Here
+The evaluator is separate from the application. It does not deploy infrastructure, change the model used by the app, enqueue jobs, upload audio, or write project state. Only commands with `-Live` or `--live` call paid AWS models.
 
-From the repository root in PowerShell, with Python 3.12 installed:
+## Quick Start
+
+From the repository root in PowerShell:
 
 ```powershell
-# One-time setup in work/model-eval-venv. No model calls.
+# Create the isolated evaluation environment. No model calls.
 .\scripts\run-model-evals.ps1 -Setup
 
-# List every scenario, then preview the three regression smoke cases.
+# See the available cases and preview the smoke set. No model calls.
 .\scripts\run-model-evals.ps1 -List
 .\scripts\run-model-evals.ps1 -Tag smoke
 
-# Paid: run those three cases with Nova Pro and a fixed Nova Pro judge.
+# Paid: run the three smoke cases with Nova Pro and a fixed Nova Pro judge.
 .\scripts\run-model-evals.ps1 -Tag smoke -Live -MaxCalls 16
 ```
 
-The smoke set tests payroll requirements, full business-case correction and objections-only refinement. It needs five candidate calls plus judge calls. The runner prints its plan before starting and stops at the total model-call cap, including any extra judge calls.
+The smoke set covers three regressions that matter to PilarPrep: retaining payroll requirements, fully correcting a business case, and keeping objection feedback inside the objections tab. The runner prints the planned calls before it starts and stops at `-MaxCalls`, including judge calls.
 
-Nova Pro is the only default candidate. The judge is also Nova Pro unless explicitly changed. The app's production settings are never edited by this tool.
+## Run a Candidate Model
 
-## Compare Models
-
-Preview a comparison before adding `-Live`:
+Preview any command before adding `-Live`:
 
 ```powershell
-# Compare the three configured candidates using the same judge and inputs.
+# Run the configured aliases with the same cases and judge.
 .\scripts\run-model-evals.ps1 -Tag smoke -Models nova-pro,nova-micro,sonnet -MaxCalls 36
 
-# Paid: test a new Converse-compatible model against the Nova Pro baseline.
-# Replace MODEL_OR_INFERENCE_PROFILE_ID with the exact available Bedrock ID.
+# Try one Bedrock Converse-compatible model without editing the config.
 .\scripts\run-model-evals.ps1 -Tag smoke -Candidate 'candidate=MODEL_OR_INFERENCE_PROFILE_ID' -MaxCalls 32 -Live
 
-# Paid: run all 28 cases against Nova Pro. Candidate calls: 52, plus judging.
+# Run the complete synthetic set against Nova Pro.
 .\scripts\run-model-evals.ps1 -Limit 0 -MaxCalls 120 -Live
 
-# Paid: select one workflow or repeat a case to assess variation.
+# Focus on a workflow or repeat one case to see variation.
 .\scripts\run-model-evals.ps1 -Tag refinement -Limit 0 -MaxCalls 24 -Live
 .\scripts\run-model-evals.ps1 -Case generate-bluemesa-payroll -Repeats 3 -MaxCalls 24 -Live
 ```
 
-Use `-Judge none` for deterministic checks only. This still charges for candidate generation with `-Live`, and it does **not** produce a quality score. `-Limit` defaults to three cases; use `-Limit 0` for every matching case. Tags are OR-matched; case IDs and tags are combined with AND.
+`-Limit` defaults to three matching cases; `-Limit 0` removes that limit. Tags are OR-matched, while a case ID and tags are combined with AND. `-Judge none` runs deterministic checks without a quality score, but live candidate calls still cost money.
 
-[models.json](models.json) defines the current Nova Pro, Nova Micro and Sonnet aliases. Add an alias there for a reusable candidate, or pass `-Candidate name=ID` for a one-off comparison. An unsupported model, unavailable region or denied permission is reported as an error, never silently mapped to another model. This runner currently expects the standard Bedrock Converse text API; models needing different request parameters require an explicit adapter change.
+[models.json](models.json) defines the Nova Pro, Nova Micro, and Claude Sonnet aliases. Use `-Candidate name=ID` for a one-time test or add an alias for repeated work. An unavailable model, region, or permission fails visibly. The runner never maps it silently to another model.
 
-### Other Platforms
-
-The Python entry point also works on Linux/macOS:
+Linux and macOS users can call the Python entry point directly:
 
 ```bash
 python3 -m venv .venv
@@ -60,92 +57,74 @@ python -m evals.model_eval --tag smoke
 python -m evals.model_eval --tag smoke --live --max-calls 16
 ```
 
-Run `python -m evals.model_eval --help` for every option. The PowerShell launcher always uses its isolated environment and can be invoked by its absolute path from another folder.
+## Scenario Coverage
 
-## Scenarios
+| Workflow | Cases | What they look for |
+| --- | ---: | --- |
+| Generate | 12 | Customer variety, payroll requirements, cloud-state distinctions, values, sparse evidence, and untrusted source text |
+| Refine | 6 | Every brief tab, complete target regeneration, corrected facts, named roles, and untouched non-target tabs |
+| Handoff | 3 | Architecture evidence, ownership, dependencies, commitments, and approval boundaries |
+| Catch-up | 3 | Useful read-only summaries for a new member, executive, and engineer |
+| Meeting analysis | 4 | Transcript-backed corrections, named owners, unresolved decisions, and retained participant names |
 
-| Workflow | Count | What it tests |
-|---|---:|---|
-| Generate | 12 | Nine customer profiles; payroll integration; on-premises, hybrid and AWS distinctions; company values; sparse evidence; unvisited URLs; untrusted source instructions |
-| Refine | 6 | All six tabs, whole-target regeneration, corrected facts, names and roles, objection isolation, preserved non-target tabs |
-| Handoff | 3 | SA evidence needs, PM ownership and dependencies, Sales commitments and approval boundaries |
-| Catch-up | 3 | New member, executive and engineer perspectives; useful read-only output from approved context |
-| Meeting analysis | 4 | Transcript-backed corrections, distinct owners, unresolved launch approval and retained participant names |
+The customer data spans nine fictional organizations. [customers.json](scenarios/customers.json) holds the source context, [cases.json](scenarios/cases.json) holds the tests and acceptance criteria, and the BlueMesa packet and transcript files provide known starting points for follow-on workflows.
 
-The customer set covers BlueMesa Payments, Apex Mutual, Northstar Health, PeakCart Retail, ForgeWorks Manufacturing, LumenStream Media, CedarCloud SaaS, Harbor Logistics and SeedSpark. All names, facts, evidence excerpts and `.example` URLs are fictional. Nothing is fetched from those URLs.
+The meeting cases use transcript text, not the MP3. They evaluate the analysis contract but do not test upload authorization, GuardDuty, Amazon Transcribe, EventBridge, or SQS.
 
-- [customers.json](scenarios/customers.json): customer context, stakeholders, values, priorities and frozen evidence.
-- [cases.json](scenarios/cases.json): scenarios, feedback, acceptance criteria, topic checks and prohibited content.
-- [blue-mesa-packet.json](scenarios/blue-mesa-packet.json): hand-authored starting packet for refinement and follow-on tests, **not** a generated answer or fallback.
-- [blue-mesa-transcript.json](scenarios/blue-mesa-transcript.json): synthetic transcript with speaker labels and fixture timestamps. It confirms the existing AWS platform while correcting API-first and retention assumptions.
+## How a Result Is Judged
 
-Only BlueMesa has meeting-analysis cases. These run on transcript text, not the MP3, so they do not exercise GuardDuty, Transcribe or upload permissions. The timestamps are evaluation fixtures, not alignment measurements of the demo recording.
+Each trial can pass through three layers:
 
-## How Scoring Works
+1. **Deterministic checks** validate the production JSON shape, required sections, source labels, topic coverage, target isolation, and known contradictions.
+2. **Strands Evals** scores factual correctness, instruction following, evidence faithfulness, audience usefulness, and bounded next steps. The default pass threshold is 7.5 out of 10, with no material factual failure and all deterministic checks passing.
+3. **Human review** asks a person to read the response beside its evidence and record factual errors and usefulness in `review.csv`.
 
-1. **Deterministic checks:** validate the production JSON contracts, required sections, source labels, topic anchors, target isolation and existing contradiction rules. Meeting proposals must quote the supplied transcript with the matching speaker and timestamp. Topic presence or a valid citation label is not proof of factual support.
-2. **Strands Evals review:** the fixed judge considers factual correctness, instruction adherence, evidence faithfulness, audience usefulness and bounded next steps. It returns a score out of 10 and an explanation. A score of at least 7.5, no material factual/instruction failure, and passing deterministic checks are required for a `passed` result.
-3. **Human review:** read the output beside its evidence, record factual errors and score usefulness in `review.csv`. Do not choose a model from its average score alone.
+A citation label or keyword match is not proof that a claim is supported. A judge score is not a calibrated probability, and a model should not be selected from its average score alone. Keep the judge fixed during a comparison, inspect failures, review examples blind when practical, and rerun finalists.
 
-Candidate identity is withheld from the judge, and candidate ordering is randomized with a recorded seed. Keep the judge fixed across comparisons. A Nova judge can still favor its own model family; review samples blind where practical, rerun finalists and use a different fixed judge as a cross-check. Scores are not calibrated probabilities or proof that hallucinations are absent.
+The judge uses the open-source [Strands Evals SDK](https://github.com/strands-agents/evals), pinned in [requirements.txt](requirements.txt). It is an evaluation dependency, not another production service.
 
-The judge uses the open-source [Strands Evals SDK](https://github.com/strands-agents/evals), pinned in [requirements.txt](requirements.txt). It is not a new service in the production architecture.
-
-The grading rubric and scenario acceptance criteria are trusted system instructions. All customer context, baseline packets, transcripts and candidate responses remain inside the Guardrail's screened evidence block. This avoids treating the judge's own grading instructions as a customer prompt attack without exempting candidate content or disabling the policy. Genuine blocks produce `candidate_blocked` or `judge_blocked`, never a fabricated score. Rule type, confidence and processing units are recorded without copying matched sensitive text from the Guardrail trace.
-
-Objection objects are normalized to the same `Concern` / `Response` / `Ask` format used in production before completeness checks. Missing fields and cross-tab changes still fail; the original generated response is preserved in the report.
-
-The parser also uses the production JSON-object parser, which accepts a code fence around an otherwise valid response. This is formatting normalization, not a model retry or content repair: invalid JSON, multiple objects and truncated responses still fail. Handoff and catch-up use the production guarded-content helper, screening new focus and meeting-outcome input separately from trusted orchestration instructions and already-approved fixture context.
+Customer context, baseline packets, transcripts, and candidate responses remain inside the Guardrail-screened evidence block. Genuine safety blocks remain visible as `candidate_blocked` or `judge_blocked`; the suite never invents a replacement answer or score.
 
 ## Reports
 
-Each paid run creates an ignored directory at `outputs/model-evals/<run-id>/`:
+A paid run creates an ignored folder at `outputs/model-evals/<run-id>/`:
 
-| File | Contents |
-|---|---|
-| `report.md` | Comparison summary and per-case failures |
-| `results.json` | Raw outputs, checks, judge reasoning, per-call tokens/timings/errors, model IDs and run settings |
-| `inputs.json` | Exact synthetic case data and built prompts used in that run |
-| `summary.csv` | Per-model trial counts, coverage, latency, tokens and estimated token cost |
-| `review.csv` | Blank human scores, factual errors and notes; never populated with invented reviews |
+| File | What it is for |
+| --- | --- |
+| `report.md` | Readable summary and per-case failures |
+| `results.json` | Raw outputs, checks, judge reasoning, model IDs, tokens, timings, and errors |
+| `inputs.json` | Exact synthetic inputs and prompts used by the run |
+| `summary.csv` | Trial counts, pass coverage, latency, tokens, and configured token-cost estimates |
+| `review.csv` | Blank fields for human scores, factual errors, and notes |
 
-Reports are checkpointed after each trial, including failures. Interrupted runs retain completed work. `results.json` records the Git commit, dataset/prompt hashes, package versions, Guardrail version and inference settings. Do not publish these output directories if you later adapt the suite to private data.
+Reports are checkpointed after every trial. A new run creates a new folder and invokes models again; it does not resume without cost. Exit code `0` means all enabled checks passed, `1` means at least one failure or budget skip, `2` means setup failed, and `130` means the run was interrupted.
 
-`checkStatus` preserves the structural result even if judging subsequently fails. `judge_blocked`, `judge_error` and `judge_budget_skipped` mean the output has no quality score. Inspect per-call `guardrail` decisions and `stopReason` before attributing these failures to the candidate model.
+Do not publish a report after adapting the suite to private data.
 
-Exit codes: `0` means all requested trials passed their enabled checks; `1` means evaluation failures, errors or budget skips; `2` means setup/plan failure; `130` means interruption. Without a judge, success is explicitly `checks_passed`, not a quality endorsement. A rerun creates a new directory and invokes the models again; it does not resume for free.
+## AWS Access and Cost
 
-## AWS Access and Cost Controls
+The default profile is `pillarprep-deployer` in `us-east-1`. Use an assumed role, never root credentials, and confirm the account before a paid run. The evaluator needs Bedrock model invocation and Guardrail permissions; it does not need write access to S3, DynamoDB, SQS, or CloudFormation.
 
-The default profile is `pillarprep-deployer`, in `us-east-1`. Override with `-Profile` and `-Region`. Use an assumed role; root credentials are rejected. Refresh the profile's existing login method when expired, then verify identity with `aws sts get-caller-identity --profile pillarprep-deployer`. Never paste exported credentials into the suite or commit them.
+The runner discovers the Guardrail from the PilarPrep stack. Missing Guardrail settings stop the run rather than disabling safety. Cross-region models can require permissions for destination models as well as the inference profile.
 
-The role needs `bedrock:InvokeModel` on the selected model/inference profiles and `bedrock:ApplyGuardrail` on the configured Guardrail. Cross-region inference may require destination-model permissions as well. The runner discovers `BedrockGuardrailId` and `BedrockGuardrailVersion` through `cloudformation:DescribeStacks` on `pillarprep-bedrock`. Alternatively, use the Python CLI's `--guardrail-id` and `--guardrail-version` together. No S3, DynamoDB, SQS or deployment write permission is needed by the evaluation code.
+- `-MaxCalls` limits candidate and judge attempts. It is not a dollar budget.
+- Candidate requests run sequentially with no automatic fallback or application repair loop.
+- Output defaults to 4,800 tokens per candidate route and 1,600 for the judge.
+- Token prices in [models.json](models.json) begin as unknown. Add a rate only after checking the exact model, region, and tier against [AWS Bedrock pricing](https://aws.amazon.com/bedrock/pricing/).
+- [pricing/2026-08-30.json](pricing/2026-08-30.json) is a dated snapshot for reproducibility, not a live price feed.
+- Reported cost covers configured token rates only. It is not an AWS invoice and excludes Guardrails and supporting services.
 
-The SDK sends candidate and judge requests with the configured Guardrail. Missing Guardrail configuration fails setup; it is not disabled to improve scores. A safety block in the untrusted-evidence case is a Guardrail outcome to inspect, not proof that the model cannot follow ordinary instructions. Other blocks, access denials and truncation remain visible as errors.
+## What the Suite Does Not Prove
 
-- `-MaxCalls` caps all candidate and judge Converse attempts, including SDK judge repairs. It is **not a dollar budget**.
-- Candidate requests run sequentially with no automatic retry, repair, fallback or provisioned capacity. AWS SDK retries are disabled. Model quotas and network failures can still interrupt a trial.
-- `-MaxTokens` defaults to 4,800 output tokens **per candidate route**, with 1,600 for the judge. A generated packet uses three routes; other actions use one.
-- Costs include candidate tokens, judge tokens and Guardrail processing. No free-tier eligibility is assumed.
-- Optional per-million-token rates in [models.json](models.json) start at `null`. Fill them only after checking the exact model, region and inference tier against [official Bedrock pricing](https://aws.amazon.com/bedrock/pricing/). Reports label missing rates/usage unknown, never zero.
-- [pricing/2026-08-30.json](pricing/2026-08-30.json) is a dated standard-inference snapshot for the initial three-model comparison. Pass `--model-config evals/pricing/2026-08-30.json` to reproduce its token estimates. Recheck prices before future runs; it is not a live price feed.
-- Reported cost is a token-only estimate, not an AWS bill. It excludes Guardrail processing and other service charges. Candidate and judge calls are individually recorded; shared judge cost appears in each candidate's total.
+The benchmark freezes the Nova Pro prompt profile and common inference settings so model choice is the main variable. It does not reproduce every production retry, Micro-specific tuning, or latency mode.
 
-## What This Benchmark Does Not Prove
+Handoff, catch-up, and meeting cases call Bedrock with the production reasoning prompts, but they do not run the deployed AgentCore Runtime, Strands tools, queue, storage, or browser. Evidence retrieval uses frozen fixtures instead of querying the live Knowledge Base. Use the application's tests and authorized live smoke checks before changing a production model.
 
-The adapters reuse the application's prompt builders and validators, but intentionally freeze the **Nova Pro prompt profile**, temperature `0.1`, standard latency tier, evidence and output limits for every candidate. This isolates model choice; it does not reproduce Micro's model-specific tuning, production repair loops or optimized inference settings. The judge uses temperature `0`.
-
-Handoff, catch-up and meeting cases call Bedrock directly with the production reasoning prompts. They do not run the deployed Strands tools, its structured-output schema injection, repair loop or AgentCore Runtime. First-attempt JSON field errors here do not by themselves establish a production failure. Retrieval evidence is frozen rather than queried from the Knowledge Base. There is no authentication, customer-isolation, queue, S3/DynamoDB persistence, audio processing or full-browser test here. Generation time excludes judge time and contains no SQS wait.
-
-Some production contradiction rules are deliberately lexical and can flag negated mentions such as "not on-premises." Review those failures separately from actual factual errors. Keyword matches and source-label checks cannot establish semantic entailment. The judge and human review cover that gap, imperfectly.
-
-Use the existing application/unit/browser tests and authorized live smoke tests for system behavior. A candidate should pass those checks before any production model switch.
-
-## Verify the Runner Without Charges
+## Verify Without Model Charges
 
 ```powershell
 .\work\model-eval-venv\Scripts\python.exe -m unittest discover evals/tests -v
 .\scripts\run-model-evals.ps1 -Tag smoke
 ```
 
-Tests mock the Bedrock transport, including the actual Strands Evals scoring integration. CI installs the pinned SDK, runs these tests and previews the smoke plan without AWS credentials or paid calls. The existing `npm run eval:briefs` remains the deterministic demo-rubric check; it is not replaced by or confused with a live model benchmark.
+These tests mock Bedrock, including the Strands Evals integration. The existing `npm run eval:briefs` command remains the deterministic demo-quality check; it is separate from live candidate evaluation.
