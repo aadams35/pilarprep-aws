@@ -4,13 +4,15 @@ import { chromium } from '@playwright/test';
 
 const { values } = parseArgs({ options: {
   users: { type: 'string', default: '4' },
-  url: { type: 'string', default: 'https://pilarprep.app' },
+  url: { type: 'string' },
   'confirm-cost': { type: 'boolean', default: false },
 } });
 const users = Number(values.users);
+const targetUrl = values.url?.trim();
 assert(Number.isInteger(users) && users >= 2 && users <= 6, '--users must be between 2 and 6');
+assert(targetUrl, '--url https://YOUR-DOMAIN is required; no public demo URL is bundled.');
 assert(values['confirm-cost'], 'This test creates one paid Nova Pro brief per fresh guest. Add --confirm-cost.');
-assert.equal(new URL(values.url).protocol, 'https:', 'Live tests require HTTPS');
+assert.equal(new URL(targetUrl).protocol, 'https:', 'Live tests require HTTPS');
 const timeoutMs = 720_000;
 const browser = await chromium.launch({ headless: true });
 const runs = [];
@@ -25,7 +27,7 @@ async function prepare(index) {
   page.on('request', request => {
     if (request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/jobs')) run.submissions += 1;
   });
-  await page.goto(values.url, { waitUntil: 'networkidle' });
+  await page.goto(targetUrl, { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: /BlueMesa Payments/ }).click();
   return run;
 }

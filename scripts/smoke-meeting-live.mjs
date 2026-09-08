@@ -5,11 +5,15 @@ import { readFile } from "node:fs/promises";
 const region = process.env.AWS_REGION ?? "us-east-1";
 const backendStack = process.env.PILLARPREP_BACKEND_STACK ?? "pillarprep-bedrock";
 const jobsStack = process.env.PILLARPREP_JOBS_STACK ?? "pillarprep-jobs";
-const origin = process.env.PILLARPREP_PUBLIC_ORIGIN ?? "https://pilarprep.app";
+const origin = process.env.PILLARPREP_PUBLIC_ORIGIN?.trim();
 const workspaceIdToken =
   process.env.PILLARPREP_WORKSPACE_ID_TOKEN?.trim() ?? "";
 const reuseApprovedBrief =
   process.env.PILLARPREP_REUSE_APPROVED_BRIEF === "true";
+
+if (!origin || new URL(origin).protocol !== "https:") {
+  throw new Error("PILLARPREP_PUBLIC_ORIGIN must be set to the deployment's HTTPS origin.");
+}
 
 if (!workspaceIdToken) {
   throw new Error(

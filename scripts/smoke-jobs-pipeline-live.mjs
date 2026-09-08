@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 const region = process.env.AWS_REGION ?? "us-east-1";
 const backendStack = process.env.PILLARPREP_BACKEND_STACK ?? "pillarprep-bedrock";
 const jobsStack = process.env.PILLARPREP_JOBS_STACK ?? "pillarprep-jobs";
-const origin = process.env.PILLARPREP_PUBLIC_ORIGIN ?? "https://pilarprep.app";
+const origin = process.env.PILLARPREP_PUBLIC_ORIGIN?.trim();
 const resumeApproved =
   process.env.PILLARPREP_SMOKE_RESUME_APPROVED === "true";
 const refreshApproval =
@@ -25,6 +25,9 @@ const rotateIdentityBeforeRefinement =
   process.env.PILLARPREP_SMOKE_ROTATE_IDENTITY === "true";
 const smokePresetClient =
   process.env.PILLARPREP_SMOKE_PRESET ?? "peakcart-retail";
+if (!origin || new URL(origin).protocol !== "https:") {
+  throw new Error("PILLARPREP_PUBLIC_ORIGIN must be set to the deployment's HTTPS origin.");
+}
 if (
   ![
     "apex-mutual",

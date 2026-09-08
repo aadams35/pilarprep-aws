@@ -221,7 +221,6 @@ def public_summary(state):
         "targetCloudFrontName": f"pilarprep-{state['environment']}-web",
         "completedPhases": state["steps"],
         "distributionId": state["stacks"]["frontend"]["outputs"]["CloudFrontDistributionId"],
-        "websiteUnchanged": "https://pilarprep.app",
     }
 
 

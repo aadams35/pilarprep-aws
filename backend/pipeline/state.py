@@ -39,7 +39,7 @@ ALLOWED_ORIGINS = tuple(
     item.strip()
     for item in os.getenv(
         "ALLOWED_ORIGINS",
-        "https://pilarprep.app",
+        "https://deployment-pending.invalid",
     ).split(",")
     if item.strip()
 )
@@ -266,7 +266,7 @@ def allowed_origin(event: Mapping[str, Any]) -> str:
     origin = _header(event, "origin")
     if origin and origin in ALLOWED_ORIGINS:
         return origin
-    return ALLOWED_ORIGINS[0] if ALLOWED_ORIGINS else "https://pilarprep.app"
+    return ALLOWED_ORIGINS[0] if ALLOWED_ORIGINS else "https://deployment-pending.invalid"
 
 
 def assert_secure_request(event: Mapping[str, Any]) -> None:

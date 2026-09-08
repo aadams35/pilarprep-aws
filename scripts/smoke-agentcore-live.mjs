@@ -7,6 +7,11 @@ import { randomUUID } from "node:crypto";
 const region = process.env.AWS_REGION ?? "us-east-1";
 const backendStack = process.env.PILLARPREP_BACKEND_STACK ?? "pillarprep-bedrock";
 const agentStack = process.env.PILLARPREP_AGENT_STACK ?? "pillarprep-agentcore";
+const origin = process.env.PILLARPREP_PUBLIC_ORIGIN?.trim();
+
+if (!origin || new URL(origin).protocol !== "https:") {
+  throw new Error("PILLARPREP_PUBLIC_ORIGIN must be set to the deployment's HTTPS origin.");
+}
 
 function awsJson(args) {
   const output = execFileSync("aws", [...args, "--region", region, "--output", "json"], {
@@ -136,8 +141,8 @@ async function postAndRead(url, payload, credentials, label) {
 
 const backend = stackOutputs(backendStack);
 const agent = stackOutputs(agentStack);
-await assertCors(backend.BriefApiUrl, "https://pilarprep.app", "Brief API CORS");
-await assertCors(agent.AgentApiUrl, "https://pilarprep.app", "Agent API CORS");
+await assertCors(backend.BriefApiUrl, origin, "Brief API CORS");
+await assertCors(agent.AgentApiUrl, origin, "Agent API CORS");
 const credentials = await cognitoCredentials(backend.DemoIdentityPoolId);
 const sessionId = `session-smoke-${randomUUID()}`;
 

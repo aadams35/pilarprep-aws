@@ -83,7 +83,7 @@ The repository includes a paid live smoke test that opens independent guest brow
 ```powershell
 npm ci
 npx playwright install chromium
-npm run smoke:multiuser -- --users 4 --confirm-cost
+npm run smoke:multiuser -- --users 4 --url https://YOUR-DOMAIN --confirm-cost
 ```
 
 The test checks that each browser receives its own job and result, that duplicate submissions are blocked, and that no deterministic fallback appears. It does not certify signed-in tenant membership, a shared corporate IP, or every audio path. Run those cases separately before inviting a larger audience.

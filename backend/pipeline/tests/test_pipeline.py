@@ -131,7 +131,7 @@ def iam_event(method="POST", path="/jobs", *, body=None, query=None):
         "rawPath": path,
         "body": json.dumps(body or {}),
         "headers": {
-            "origin": "https://pilarprep.app",
+            "origin": "https://deployment-pending.invalid",
             "x-forwarded-proto": "https",
         },
         "queryStringParameters": query,
@@ -260,7 +260,7 @@ class CommonContractTests(unittest.TestCase):
 
     def test_production_rejects_http(self):
         event = iam_event()
-        event["headers"]["origin"] = "http://pilarprep.app"
+        event["headers"]["origin"] = "http://deployment-pending.invalid"
         with self.assertRaises(common.AuthorizationError):
             common.assert_secure_request(event)
 

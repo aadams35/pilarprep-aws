@@ -4,7 +4,6 @@
   "private": true,
   "description": "Customer briefing and meeting intelligence on AWS",
   "repository": { "type": "git", "url": "https://github.com/aadams35/pilarprep-aws.git" },
-  "homepage": "https://pilarprep.app",
   "engines": { "node": ">=22.13.0" },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
