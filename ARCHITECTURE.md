@@ -4,8 +4,6 @@ PilarPrep turns customer context into a meeting brief, a team handoff, and a gov
 
 ![PilarPrep AWS architecture](docs/architecture/pilarprep-aws-architecture.png)
 
-The [architecture-to-code map](docs/architecture/code-map.md) links each box in the diagram to the files that implement it.
-
 ## The Short Version
 
 Every AI action follows the same backbone:
@@ -81,7 +79,7 @@ Bedrock manages the foundation-model weights. PilarPrep stores prompts, context,
 
 CloudFront serves the frontend from a private S3 origin and proxies workspace API requests. Cognito supports guest demo credentials and signed-in users. The backend still checks scope on every operation; browser state is never treated as authorization.
 
-WAF, ACM, CloudWatch, X-Ray, SNS, KMS, Secrets Manager, and IAM support the paths shown in the diagram. They are collapsed there so the main request flow stays readable. [Security](SECURITY.md) explains the boundaries and known limits.
+WAF, ACM, CloudWatch, X-Ray, SNS, KMS, Secrets Manager, and IAM support the paths shown in the diagram. They are collapsed there so the main request flow stays readable. The public repository is intended for synthetic demonstration data, not confidential customer information.
 
 ## Why the Design Looks This Way
 

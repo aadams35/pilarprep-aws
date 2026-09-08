@@ -137,4 +137,4 @@ Before teardown:
 3. Confirm bucket names and object ownership before any cleanup.
 4. Delete retained resources separately only after the stacks and dependencies are understood.
 
-See [operations](docs/operations.md) for troubleshooting and [security](SECURITY.md) for the demo's data boundaries.
+See [operations](docs/operations.md) for troubleshooting, monitoring, and safe cleanup.

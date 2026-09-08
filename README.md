@@ -10,7 +10,7 @@ PilarPrep helps Sales and Solutions Architects prepare from the same customer fa
 
 Built for an AWS-focused hackathon, where our team won, and continued as a working serverless application.
 
-[Try the demo](https://pilarprep.app) | [Architecture and code map](docs/architecture/code-map.md) | [Deploy to AWS](DEPLOYMENT.md) | [Security](SECURITY.md)
+[Architecture](ARCHITECTURE.md) | [Deploy to AWS](DEPLOYMENT.md)
 
 > The public demo uses fictional customer scenarios. Do not enter confidential customer information or upload real customer recordings. Audio processing requires sign-in and is currently limited to the synthetic BlueMesa scenario.
 
@@ -39,7 +39,7 @@ The API returns a job ID immediately while processing continues in the backgroun
 
 For readability, WAF, ACM, monitoring, encryption, and secret management are summarized rather than drawn as separate branches. The diagram uses official AWS icons and does not imply a VPC or private-subnet deployment.
 
-See [Architecture](ARCHITECTURE.md) for the request flows and current tradeoffs. The [code map](docs/architecture/code-map.md) connects every diagram box to its implementation or infrastructure definition.
+See [Architecture](ARCHITECTURE.md) for the request flows and current tradeoffs.
 
 ## Engineering Highlights
 
@@ -97,7 +97,6 @@ The default verification suite uses local fixtures and mocked AWS services; it d
 ## Further Reading
 
 - [Deployment](DEPLOYMENT.md): prerequisites, stack order, configuration, and validation.
-- [Security](SECURITY.md): demo boundaries, reporting, and known production gaps.
 - [Operations](docs/operations.md): failed jobs, DLQ handling, audio events, and cost controls.
 - [Scaling](docs/scaling.md): simultaneous users, worker limits, load checks, and a phased capacity plan.
 - [Contributing](CONTRIBUTING.md) and [attribution](NOTICE.md).
